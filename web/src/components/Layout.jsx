@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   Terminal,
@@ -13,6 +13,7 @@ import {
 import { api } from '../api';
 import { useStore } from '../store';
 import CommandPalette from './CommandPalette';
+import TransfersTray from './TransfersTray';
 
 const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
@@ -25,8 +26,32 @@ const NAV = [
 ];
 
 export default function Layout() {
-  const { user, setUser } = useStore();
+  const user = useStore((s) => s.user);
+  const setUser = useStore((s) => s.setUser);
   const navigate = useNavigate();
+
+  // Global tab shortcuts: Ctrl+Shift+[ / ] cycle, Ctrl+Shift+X closes.
+  // (Ctrl+W / Ctrl+Tab are browser-reserved and can't be intercepted.)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!e.ctrlKey || !e.shiftKey) return;
+      const s = useStore.getState();
+      if (!s.tabs.length) return;
+      const idx = s.tabs.findIndex((t) => t.id === s.activeTabId);
+      if (e.key === '}') {
+        e.preventDefault();
+        s.setActiveTab(s.tabs[(idx + 1) % s.tabs.length].id);
+      } else if (e.key === '{') {
+        e.preventDefault();
+        s.setActiveTab(s.tabs[(idx - 1 + s.tabs.length) % s.tabs.length].id);
+      } else if (e.key === 'X' && s.activeTabId) {
+        e.preventDefault();
+        s.closeTab(s.activeTabId);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const logout = async () => {
     try {
@@ -78,6 +103,7 @@ export default function Layout() {
         <Outlet />
       </main>
       <CommandPalette />
+      <TransfersTray />
     </div>
   );
 }

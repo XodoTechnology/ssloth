@@ -91,6 +91,10 @@ function handleTerminalWs(ws, req, user) {
         connect();
         break;
 
+      case 'ping':
+        send({ type: 'pong', t: msg.t });
+        break;
+
       case 'resize':
         pendingResize = { cols: clampDim(msg.cols, 80), rows: clampDim(msg.rows, 24) };
         if (stream) stream.setWindow(pendingResize.rows, pendingResize.cols, 0, 0);
@@ -180,6 +184,11 @@ function handleTerminalWs(ws, req, user) {
     session.ws = ws;
     connected = true;
     audit(user, 'ssh.connect', spec.label, req);
+    if (spec.hostId) {
+      try {
+        db.prepare('UPDATE hosts SET last_used_at = unixepoch() WHERE id = ?').run(spec.hostId);
+      } catch {}
+    }
     conn.shell(
       { term: 'xterm-256color', cols: pendingResize.cols, rows: pendingResize.rows },
       (err, s) => {

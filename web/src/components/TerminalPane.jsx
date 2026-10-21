@@ -4,8 +4,10 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
-import { ShieldAlert, KeyRound } from 'lucide-react';
+import { ShieldAlert, KeyRound, CloudUpload } from 'lucide-react';
 import { useStore } from '../store';
+import { uploadToSession } from '../transfers';
+import { termOptions } from '../termThemes';
 import Modal from './Modal';
 
 const encoder = new TextEncoder();
@@ -24,9 +26,18 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   const [hostkey, setHostkey] = useState(null);
   const [authPrompt, setAuthPrompt] = useState(null);
   const [password, setPassword] = useState('');
+  const [fileDrag, setFileDrag] = useState(false);
   const stateRef = useRef({ status: 'idle' });
+  const activeRef = useRef(active);
 
-  const { toast, registerPane, broadcastText } = useStore();
+  const toast = useStore((s) => s.toast);
+  const registerPane = useStore((s) => s.registerPane);
+  const broadcastText = useStore((s) => s.broadcastText);
+  const setTabBell = useStore((s) => s.setTabBell);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   function setPaneState(patch) {
     stateRef.current = { ...stateRef.current, ...(typeof patch === 'function' ? patch(stateRef.current) : patch) };
@@ -36,16 +47,9 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   useEffect(() => {
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 13,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       scrollback: 10000,
-      theme: {
-        background: '#0a0d10',
-        foreground: '#d6dde5',
-        cursor: '#34d399',
-        cursorAccent: '#0a0d10',
-        selectionBackground: '#33455c',
-      },
+      ...termOptions(),
       allowProposedApi: true,
     });
     const fit = new FitAddon();
@@ -71,6 +75,13 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     term.onSelectionChange(() => {
       const sel = term.getSelection();
       if (sel) navigator.clipboard?.writeText(sel).catch(() => {});
+    });
+
+    term.onBell(() => {
+      if (!activeRef.current || document.hidden) {
+        setTabBell(tab.id);
+        toast(`Terminal bell — ${tab.title}`, 'info');
+      }
     });
 
     const onContextMenu = (e) => {
@@ -139,6 +150,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     const seq = ++reconnectSeq.current;
+    let pingTimer = null;
 
     ws.onopen = () => {
       const { cols, rows } = term || { cols: 80, rows: 24 };
@@ -175,6 +187,12 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
           sessionRef.current = msg.sessionId;
           setPaneState({ status: 'ready', sessionId: msg.sessionId, label: msg.label });
           term?.focus();
+          pingTimer = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
+          }, 4000);
+          break;
+        case 'pong':
+          setPaneState({ rtt: Date.now() - msg.t });
           break;
         case 'recording':
           setPaneState({ recording: msg.on });
@@ -183,6 +201,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     };
 
     ws.onclose = () => {
+      clearInterval(pingTimer);
       if (reconnectSeq.current !== seq) return;
       setPaneState({
         status: stateRef.current.status === 'error' ? 'error' : 'closed',
@@ -204,8 +223,37 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
       className="relative flex-1 min-w-0 min-h-0 w-full h-full"
       onMouseDown={onFocus}
       style={focused ? { boxShadow: 'inset 0 0 0 1px rgba(52,211,153,0.35)' } : undefined}
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          setFileDrag(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setFileDrag(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setFileDrag(false);
+        const files = e.dataTransfer?.files;
+        const sid = sessionRef.current;
+        if (files?.length && sid) {
+          const st = useStore.getState();
+          const dir = st.sftpPaths[sid] || '.';
+          uploadToSession(sid, dir, [...files], tab.title);
+        } else if (files?.length) {
+          toast('no session yet — connect first', 'info');
+        }
+      }}
     >
       <div ref={containerRef} className="absolute inset-0" />
+
+      {fileDrag && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-emerald-500 bg-emerald-950/70">
+          <CloudUpload size={28} className="text-emerald-400" />
+          <span className="text-sm text-emerald-300">drop to upload via SFTP</span>
+        </div>
+      )}
 
       {hostkey && (
         <Modal

@@ -11,6 +11,9 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   FileUp,
+  Star,
+  Copy,
+  Clock,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -73,12 +76,23 @@ export default function Sessions() {
   const groups = useMemo(() => {
     const m = new Map();
     for (const h of filtered) {
+      if (h.pinned) continue; // pinned hosts live in their own group
       const f = h.folder || 'Ungrouped';
       if (!m.has(f)) m.set(f, []);
       m.get(f).push(h);
     }
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [filtered]);
+
+  const pinned = useMemo(() => filtered.filter((h) => h.pinned), [filtered]);
+  const recent = useMemo(
+    () =>
+      filtered
+        .filter((h) => h.last_used_at)
+        .sort((a, b) => b.last_used_at - a.last_used_at)
+        .slice(0, 5),
+    [filtered]
+  );
 
   const connectHost = (h) => {
     openTab({ hostId: h.id }, h.name, h.color);
@@ -96,6 +110,26 @@ export default function Sessions() {
     setQuick('');
   };
 
+  const togglePin = async (h) => {
+    try {
+      await api(`/api/hosts/${h.id}`, { method: 'PUT', body: { pinned: !h.pinned } });
+      refreshAll(api);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const duplicateHost = async (h) => {
+    try {
+      const { id, last_used_at, pinned, ...rest } = h;
+      await api('/api/hosts', { method: 'POST', body: { ...rest, name: `${h.name} copy` } });
+      toast('host duplicated', 'success');
+      refreshAll(api);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
   const deleteHost = async (h) => {
     if (!confirm(`Delete host "${h.name}"?`)) return;
     try {
@@ -106,6 +140,81 @@ export default function Sessions() {
       toast(e.message, 'error');
     }
   };
+
+  const renderHost = (h) => (
+    <div
+      key={h.id}
+      className="group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
+      onClick={() => connectHost(h)}
+      title={`${h.username}@${h.hostname}:${h.port}`}
+    >
+      <span
+        className={`h-2 w-2 rounded-full shrink-0 ${DOT_COLORS[h.color] || 'bg-zinc-600'} ${
+          hostStatus[h.id] === 'up'
+            ? 'ring-2 ring-emerald-500/60'
+            : hostStatus[h.id] === 'down'
+              ? 'ring-2 ring-red-500/60'
+              : ''
+        }`}
+        title={
+          hostStatus[h.id] === 'up'
+            ? 'reachable'
+            : hostStatus[h.id] === 'down'
+              ? 'unreachable'
+              : 'status unknown'
+        }
+      />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-zinc-200 truncate">{h.name}</div>
+        <div className="text-[11px] text-zinc-500 truncate font-mono">
+          {h.username}@{h.hostname}
+          {h.port !== 22 ? `:${h.port}` : ''}
+        </div>
+      </div>
+      <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+        <button
+          className={`p-1 ${h.pinned ? 'text-amber-400' : 'text-zinc-500 hover:text-amber-400'}`}
+          title={h.pinned ? 'Unpin' : 'Pin to top'}
+          onClick={(e) => {
+            e.stopPropagation();
+            togglePin(h);
+          }}
+        >
+          <Star size={13} className={h.pinned ? 'fill-amber-400' : ''} />
+        </button>
+        <button
+          className="p-1 text-zinc-500 hover:text-zinc-200"
+          title="Duplicate"
+          onClick={(e) => {
+            e.stopPropagation();
+            duplicateHost(h);
+          }}
+        >
+          <Copy size={13} />
+        </button>
+        <button
+          className="p-1 text-zinc-500 hover:text-zinc-200"
+          title="Edit"
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditing(h);
+          }}
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          className="p-1 text-zinc-500 hover:text-red-400"
+          title="Delete"
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteHost(h);
+          }}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -147,6 +256,22 @@ export default function Sessions() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-3">
+            {pinned.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-amber-500">
+                  <Star size={11} className="fill-amber-500" /> Pinned
+                </div>
+                {pinned.map(renderHost)}
+              </div>
+            )}
+            {recent.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                  <Clock size={11} /> Recent
+                </div>
+                {recent.map(renderHost)}
+              </div>
+            )}
             {groups.map(([folder, list]) => (
               <div key={folder}>
                 <button
@@ -157,61 +282,7 @@ export default function Sessions() {
                   <span className="truncate">{folder}</span>
                   <span className="ml-auto text-zinc-600">{list.length}</span>
                 </button>
-                {!collapsed[folder] &&
-                  list.map((h) => (
-                    <div
-                      key={h.id}
-                      className="group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
-                      onClick={() => connectHost(h)}
-                      title={`${h.username}@${h.hostname}:${h.port}`}
-                    >
-                      <span
-                        className={`h-2 w-2 rounded-full shrink-0 ${DOT_COLORS[h.color] || 'bg-zinc-600'} ${
-                          hostStatus[h.id] === 'up'
-                            ? 'ring-2 ring-emerald-500/60'
-                            : hostStatus[h.id] === 'down'
-                              ? 'ring-2 ring-red-500/60'
-                              : ''
-                        }`}
-                        title={
-                          hostStatus[h.id] === 'up'
-                            ? 'reachable'
-                            : hostStatus[h.id] === 'down'
-                              ? 'unreachable'
-                              : 'status unknown'
-                        }
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm text-zinc-200 truncate">{h.name}</div>
-                        <div className="text-[11px] text-zinc-500 truncate font-mono">
-                          {h.username}@{h.hostname}
-                          {h.port !== 22 ? `:${h.port}` : ''}
-                        </div>
-                      </div>
-                      <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                        <button
-                          className="p-1 text-zinc-500 hover:text-zinc-200"
-                          title="Edit"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditing(h);
-                          }}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          className="p-1 text-zinc-500 hover:text-red-400"
-                          title="Delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteHost(h);
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                {!collapsed[folder] && list.map(renderHost)}
               </div>
             ))}
             {hosts.length === 0 && (
@@ -244,8 +315,15 @@ export default function Sessions() {
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  t.status === 'ready' ? 'bg-emerald-500' : t.status === 'connecting' ? 'bg-amber-500 animate-pulse' : 'bg-zinc-600'
+                  t.bell
+                    ? 'bg-amber-400 animate-ping'
+                    : t.status === 'ready'
+                      ? 'bg-emerald-500'
+                      : t.status === 'connecting'
+                        ? 'bg-amber-500 animate-pulse'
+                        : 'bg-zinc-600'
                 }`}
+                title={t.bell ? 'terminal bell' : ''}
               />
               {t.title}
               <button

@@ -12,6 +12,7 @@ import {
   Radio,
   Columns2,
   Square,
+  FileDown,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -30,18 +31,16 @@ export default function TerminalView({ tab, active }) {
   const [varPrompt, setVarPrompt] = useState(null); // {snippet, vars, execute}
   const [varValues, setVarValues] = useState({});
 
-  const {
-    snippets,
-    hosts,
-    closeTab,
-    setPaneState,
-    setActivePane,
-    toggleBroadcast,
-    broadcastTabId,
-    sendToTab,
-    activeSender,
-    toast,
-  } = useStore();
+  const snippets = useStore((s) => s.snippets);
+  const hosts = useStore((s) => s.hosts);
+  const closeTab = useStore((s) => s.closeTab);
+  const setPaneState = useStore((s) => s.setPaneState);
+  const setActivePane = useStore((s) => s.setActivePane);
+  const toggleBroadcast = useStore((s) => s.toggleBroadcast);
+  const broadcastTabId = useStore((s) => s.broadcastTabId);
+  const sendToTab = useStore((s) => s.sendToTab);
+  const activeSender = useStore((s) => s.activeSender);
+  const toast = useStore((s) => s.toast);
   const paneStates = useStore((s) => s.paneStates);
   const activePaneId = useStore((s) => s.activePane[tab.id]) || panes[0].id;
   const pstate = paneStates[`${tab.id}:${activePaneId}`] || { status: 'idle' };
@@ -92,6 +91,24 @@ export default function TerminalView({ tab, active }) {
     const s = sender();
     if (!s?.sendJson) return;
     s.sendJson({ type: 'record', on: !recording });
+  };
+
+  const downloadLog = () => {
+    const term = sender()?.getTerm?.();
+    if (!term) return toast('no terminal', 'error');
+    const buf = term.buffer.active;
+    const lines = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    const blob = new Blob([lines.join('\n').replace(/\n+$/, '\n')], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${tab.title.replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.log`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('session log downloaded', 'success');
   };
 
   return (
@@ -186,6 +203,13 @@ export default function TerminalView({ tab, active }) {
         </button>
         <button
           className="btn-ghost !py-1 !px-2 text-xs"
+          onClick={downloadLog}
+          title="Download scrollback as .log"
+        >
+          <FileDown size={14} />
+        </button>
+        <button
+          className="btn-ghost !py-1 !px-2 text-xs"
           onClick={() => setSplitPicker(true)}
           disabled={panes.length >= 2}
           title="Split pane"
@@ -274,6 +298,7 @@ export default function TerminalView({ tab, active }) {
         {panes.length > 1 && <span>{panes.length} panes</span>}
         <span className="ml-auto">
           {status === 'ready' ? 'ssh channel open' : status}
+          {pstate.rtt != null && status === 'ready' ? ` · ${pstate.rtt}ms` : ''}
           {broadcasting ? ' · broadcast on' : ''}
         </span>
       </div>

@@ -66,4 +66,7 @@ body {
   .card {
     @apply rounded-xl border border-ink-700 bg-ink-850;
   }
+  .kbd {
+    @apply inline-block rounded border border-ink-600 bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300;
+  }
 }

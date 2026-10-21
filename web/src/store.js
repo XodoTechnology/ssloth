@@ -25,11 +25,30 @@ export const useStore = create((set, get) => ({
   activePane: {}, // tabId -> paneId
   broadcastTabId: null,
 
+  // transfer queue: [{id, sessionId, label, name, dir, kind, pct, state}] kind=up|down, state=active|done|error
+  transfers: [],
+  sftpPaths: {}, // sessionId -> last browsed remote dir
+
   // command palette
   paletteOpen: false,
 
   // toasts: [{id, kind, text}]
   toasts: [],
+
+  addTransfer(t) {
+    set((s) => ({ transfers: [...s.transfers, t] }));
+  },
+  updateTransfer(id, patch) {
+    set((s) => ({
+      transfers: s.transfers.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    }));
+  },
+  removeTransfer(id) {
+    set((s) => ({ transfers: s.transfers.filter((t) => t.id !== id) }));
+  },
+  setSftpPath(sessionId, path) {
+    set((s) => ({ sftpPaths: { ...s.sftpPaths, [sessionId]: path } }));
+  },
 
   toast(text, kind = 'info') {
     const id = Date.now() + Math.random();
@@ -87,7 +106,16 @@ export const useStore = create((set, get) => ({
   },
 
   setActiveTab(id) {
-    set({ activeTabId: id });
+    set((s) => ({
+      activeTabId: id,
+      tabs: s.tabs.map((t) => (t.id === id && t.bell ? { ...t, bell: false } : t)),
+    }));
+  },
+
+  setTabBell(id) {
+    set((s) => ({
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, bell: true } : t)),
+    }));
   },
 
   registerPane(tabId, paneId, sender) {

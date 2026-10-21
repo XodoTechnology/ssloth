@@ -12,7 +12,8 @@ import {
   Trash2,
   CloudUpload,
 } from 'lucide-react';
-import { api, uploadFile } from '../api';
+import { api } from '../api';
+import { uploadToSession } from '../transfers';
 import { useStore } from '../store';
 
 function fmtSize(n) {
@@ -33,9 +34,9 @@ export default function SftpPanel({ sessionId, label }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const [uploads, setUploads] = useState([]); // [{name, pct, error}]
   const fileInput = useRef(null);
-  const { toast } = useStore();
+  const toast = useStore((s) => s.toast);
+  const setSftpPath = useStore((s) => s.setSftpPath);
 
   const load = useCallback(
     async (p) => {
@@ -46,13 +47,14 @@ export default function SftpPanel({ sessionId, label }) {
         setEntries(r.entries);
         setRealPath(r.path);
         setPath(r.path);
+        setSftpPath(sessionId, r.path);
       } catch (e) {
         setError(e.message);
       } finally {
         setLoading(false);
       }
     },
-    [sessionId]
+    [sessionId, setSftpPath]
   );
 
   useEffect(() => {
@@ -66,24 +68,11 @@ export default function SftpPanel({ sessionId, label }) {
     load(up);
   };
 
-  const doUpload = async (files) => {
+  const doUpload = (files) => {
     const dir = realPath || path;
-    for (const f of files) {
-      const id = Date.now() + Math.random();
-      setUploads((u) => [...u, { id, name: f.name, pct: 0 }]);
-      try {
-        await uploadFile(
-          `/api/sftp/${sessionId}/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(f.name)}`,
-          f,
-          (pct) => setUploads((u) => u.map((x) => (x.id === id ? { ...x, pct } : x)))
-        );
-        setUploads((u) => u.filter((x) => x.id !== id));
-      } catch (e) {
-        setUploads((u) => u.map((x) => (x.id === id ? { ...x, error: e.message } : x)));
-        setTimeout(() => setUploads((u) => u.filter((x) => x.id !== id)), 4000);
-      }
-    }
-    load(dir);
+    uploadToSession(sessionId, dir, files, label);
+    // refresh listing after a moment so finished files appear
+    setTimeout(() => load(dir), 1500);
   };
 
   const onDrop = (e) => {
@@ -190,28 +179,6 @@ export default function SftpPanel({ sessionId, label }) {
       </div>
 
       {error && <div className="px-3 py-2 text-xs text-red-400 border-b border-ink-700">{error}</div>}
-
-      {/* uploads progress */}
-      {uploads.length > 0 && (
-        <div className="border-b border-ink-700 px-3 py-2 space-y-1.5">
-          {uploads.map((u) => (
-            <div key={u.id}>
-              <div className="flex justify-between text-[11px]">
-                <span className="truncate text-zinc-300">{u.name}</span>
-                <span className={u.error ? 'text-red-400' : 'text-zinc-500'}>
-                  {u.error ? u.error : `${Math.round(u.pct * 100)}%`}
-                </span>
-              </div>
-              <div className="h-1 rounded bg-ink-700 overflow-hidden">
-                <div
-                  className={`h-full ${u.error ? 'bg-red-500' : 'bg-emerald-500'}`}
-                  style={{ width: `${Math.round(u.pct * 100)}%` }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* file list */}
       <div className="flex-1 overflow-y-auto">

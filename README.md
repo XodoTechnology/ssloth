@@ -37,6 +37,19 @@ port forwards.
   private key files) including ProxyJump links.
 - **Encrypted vault export** — passphrase-sealed JSON export of hosts,
   snippets, and optionally credentials; re-import skips duplicates.
+- **Background transfers** — SFTP uploads keep running across tab switches;
+  a bottom-right tray tracks progress and alerts on completion.
+- **Drop-to-upload** — drag files straight onto a terminal pane to SFTP them
+  to the remote (uses the SFTP panel's current directory).
+- **Session log export** — dump the full scrollback buffer to a `.log` file.
+- **Terminal bell alerts** — a `BEL` on a background tab flashes its dot and
+  toasts you (`sleep 5 && printf '\a'` — job-done pings).
+- **Pinned & recent hosts** — star favorites to the top; last-used group
+  updates on every connect.
+- **Latency meter** — live connection RTT in the status bar.
+- **Appearance presets** — font size + terminal themes in Settings.
+- **Keyboard shortcuts** — Ctrl+K palette, Ctrl+Shift+`[`/`]` cycle tabs,
+  Ctrl+Shift+X closes a tab.
 - **SFTP browser** — per-session file panel: browse, upload (button or
   drag-and-drop), download, mkdir, rename, recursive delete, upload progress.
 - **Snippets** — saved one-click commands runnable in the active terminal,

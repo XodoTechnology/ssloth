@@ -8,10 +8,13 @@ import {
   Plus,
   Download,
   Upload,
+  Palette,
+  Keyboard,
 } from 'lucide-react';
 import { useRef } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
+import { TERM_THEMES } from '../termThemes';
 import Modal from '../components/Modal';
 
 export default function Settings() {
@@ -25,6 +28,8 @@ export default function Settings() {
   const [nuForm, setNuForm] = useState({ username: '', password: '', is_admin: false });
   const [expForm, setExpForm] = useState({ include: false, passphrase: '' });
   const [impPass, setImpPass] = useState('');
+  const [fontSize, setFontSize] = useState(localStorage.getItem('ssloth.termFontSize') || '13');
+  const [termTheme, setTermTheme] = useState(localStorage.getItem('ssloth.termTheme') || 'dark');
   const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
@@ -236,6 +241,65 @@ export default function Settings() {
               </button>
             </div>
           )}
+        </section>
+
+        {/* appearance */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Palette size={15} className="text-emerald-400" /> Terminal appearance
+          </h2>
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="label">Theme</label>
+              <select
+                className="input !w-48"
+                value={termTheme}
+                onChange={(e) => {
+                  setTermTheme(e.target.value);
+                  localStorage.setItem('ssloth.termTheme', e.target.value);
+                }}
+              >
+                {Object.entries(TERM_THEMES).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Font size</label>
+              <select
+                className="input !w-28"
+                value={fontSize}
+                onChange={(e) => {
+                  setFontSize(e.target.value);
+                  localStorage.setItem('ssloth.termFontSize', e.target.value);
+                }}
+              >
+                {[11, 12, 13, 14, 15, 16, 18, 20].map((n) => (
+                  <option key={n} value={n}>
+                    {n}px
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[11px] text-zinc-500 pb-1">applies to new sessions — reconnect open tabs to pick it up</p>
+          </div>
+        </section>
+
+        {/* keyboard shortcuts */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Keyboard size={15} className="text-emerald-400" /> Keyboard shortcuts
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1.5 text-xs text-zinc-400">
+            <span><kbd className="kbd">Ctrl K</kbd> command palette</span>
+            <span><kbd className="kbd">Ctrl Shift ]</kbd> next tab</span>
+            <span><kbd className="kbd">Ctrl Shift [</kbd> prev tab</span>
+            <span><kbd className="kbd">Ctrl Shift X</kbd> close tab</span>
+            <span>select text = copy</span>
+            <span>right-click = paste</span>
+          </div>
         </section>
 
         {/* host keys */}

@@ -36,6 +36,9 @@ function cleanHostInput(body, { partial = false } = {}) {
   if (!partial || body.record !== undefined) {
     out.record = body.record ? 1 : 0;
   }
+  if (!partial || body.pinned !== undefined) {
+    out.pinned = body.pinned ? 1 : 0;
+  }
   if (!partial || body.folder !== undefined) out.folder = str(body.folder, 128);
   if (!partial || body.color !== undefined) out.color = str(body.color, 32);
   if (!partial || body.notes !== undefined) out.notes = String(body.notes ?? '').slice(0, 4000);
