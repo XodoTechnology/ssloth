@@ -9,7 +9,7 @@ const cookieParser = require('cookie-parser');
 const { WebSocketServer } = require('ws');
 const cookie = require('cookie');
 
-const { PORT, BIND, WEB_DIST } = require('./config');
+const { PORT, BIND, WEB_DIST, SECURE_COOKIES } = require('./config');
 const {
   COOKIE_NAME,
   resolveToken,
@@ -50,6 +50,9 @@ app.use(
         frameAncestors: ["'none'"],
         baseUri: ["'none'"],
         formAction: ["'self'"],
+        // Only rewrite http->https subresource requests when actually serving TLS;
+        // on a plain-http LAN deploy this directive makes the JS bundle unloadable.
+        upgradeInsecureRequests: SECURE_COOKIES ? [] : null,
       },
     },
     crossOriginEmbedderPolicy: false,
