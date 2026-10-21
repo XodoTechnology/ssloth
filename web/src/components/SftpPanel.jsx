@@ -11,10 +11,14 @@ import {
   Pencil,
   Trash2,
   CloudUpload,
+  Eye,
+  FileEdit,
 } from 'lucide-react';
 import { api } from '../api';
 import { uploadToSession } from '../transfers';
 import { useStore } from '../store';
+import FileEditor from './FileEditor';
+import Modal from './Modal';
 
 function fmtSize(n) {
   if (n == null) return '';
@@ -34,6 +38,8 @@ export default function SftpPanel({ sessionId, label }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const [editPath, setEditPath] = useState(null);
+  const [preview, setPreview] = useState(null); // {name, kind, content|url, size}
   const fileInput = useRef(null);
   const toast = useStore((s) => s.toast);
   const setSftpPath = useStore((s) => s.setSftpPath);
@@ -89,6 +95,28 @@ export default function SftpPanel({ sessionId, label }) {
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const openPreview = async (name) => {
+    const p = joinPath(realPath || path, name);
+    const imgExt = /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(name);
+    try {
+      const r = await api(`/api/sftp/${sessionId}/read?path=${encodeURIComponent(p)}`);
+      if (r.too_large) {
+        setPreview({ name, kind: 'toolarge', size: r.size });
+      } else if (r.binary && imgExt) {
+        // image — stream it through the download endpoint as a blob
+        const resp = await fetch(`/api/sftp/${sessionId}/download?path=${encodeURIComponent(p)}`);
+        const blob = await resp.blob();
+        setPreview({ name, kind: 'image', url: URL.createObjectURL(blob) });
+      } else if (r.binary) {
+        setPreview({ name, kind: 'binary', size: r.size });
+      } else {
+        setPreview({ name, kind: 'text', content: r.content, size: r.size });
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
 
   const mkdir = async () => {
@@ -186,9 +214,9 @@ export default function SftpPanel({ sessionId, label }) {
           <div
             key={e.name}
             className={`group flex items-center gap-2 px-3 py-1 text-sm hover:bg-ink-800 ${
-              e.is_dir ? 'cursor-pointer' : ''
+              e.is_dir ? 'cursor-pointer' : 'cursor-pointer'
             }`}
-            onClick={() => e.is_dir && nav(e.name)}
+            onClick={() => (e.is_dir ? nav(e.name) : openPreview(e.name))}
           >
             {e.is_dir ? (
               <Folder size={14} className="text-sky-400 shrink-0" />
@@ -202,6 +230,20 @@ export default function SftpPanel({ sessionId, label }) {
               {e.is_dir ? '' : fmtSize(e.size)}
             </span>
             <div className="hidden group-hover:flex items-center shrink-0" onClick={(ev) => ev.stopPropagation()}>
+              {!e.is_dir && (
+                <>
+                  <button className="p-0.5 text-zinc-500 hover:text-emerald-400" title="Preview" onClick={() => openPreview(e.name)}>
+                    <Eye size={13} />
+                  </button>
+                  <button
+                    className="p-0.5 text-zinc-500 hover:text-sky-400"
+                    title="Edit in place"
+                    onClick={() => setEditPath(joinPath(realPath || path, e.name))}
+                  >
+                    <FileEdit size={13} />
+                  </button>
+                </>
+              )}
               {!e.is_dir && (
                 <button className="p-0.5 text-zinc-500 hover:text-emerald-400" title="Download" onClick={() => download(e.name)}>
                   <Download size={13} />
@@ -230,6 +272,59 @@ export default function SftpPanel({ sessionId, label }) {
           <CloudUpload size={32} className="text-emerald-400" />
           <span className="text-sm text-emerald-300">drop to upload to {realPath || path}</span>
         </div>
+      )}
+
+      {editPath && (
+        <FileEditor
+          sessionId={sessionId}
+          path={editPath}
+          onClose={() => {
+            setEditPath(null);
+            load(realPath || path);
+          }}
+        />
+      )}
+
+      {preview && (
+        <Modal
+          title={preview.name}
+          wide
+          onClose={() => {
+            if (preview.url) URL.revokeObjectURL(preview.url);
+            setPreview(null);
+          }}
+        >
+          {preview.kind === 'text' && (
+            <pre className="font-mono text-[11px] leading-5 text-zinc-300 whitespace-pre-wrap break-all max-h-[60vh] overflow-auto">
+              {preview.content}
+            </pre>
+          )}
+          {preview.kind === 'image' && (
+            <div className="flex items-center justify-center max-h-[60vh] overflow-auto">
+              <img src={preview.url} alt={preview.name} className="max-w-full max-h-[56vh] object-contain" />
+            </div>
+          )}
+          {preview.kind === 'binary' && (
+            <div className="text-sm text-zinc-400 space-y-2">
+              <p>
+                Binary file ({fmtSize(preview.size)}) — no inline preview.
+              </p>
+              <button className="btn-primary" onClick={() => download(preview.name)}>
+                <Download size={14} /> Download
+              </button>
+            </div>
+          )}
+          {preview.kind === 'toolarge' && (
+            <div className="text-sm text-zinc-400 space-y-2">
+              <p>
+                File is {fmtSize(preview.size)} — too large to preview inline.
+              </p>
+              <button className="btn-primary" onClick={() => download(preview.name)}>
+                <Download size={14} /> Download
+              </button>
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

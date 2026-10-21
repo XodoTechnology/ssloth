@@ -15,7 +15,10 @@ export const useStore = create((set, get) => ({
   credentials: [],
   snippets: [],
   tunnels: [],
+  playbooks: [],
   hostStatus: {}, // hostId -> 'up' | 'down'
+  pendingPlaybooks: {}, // tabId -> playbookId to fire once ready
+  locked: false,
 
   // terminal tabs: [{id, title, target, color}] target={hostId} | {inline:{...}}
   tabs: [],
@@ -73,13 +76,34 @@ export const useStore = create((set, get) => ({
   },
 
   async refreshAll(api) {
-    const [h, c, s, t] = await Promise.all([
+    const [h, c, s, t, p] = await Promise.all([
       api('/api/hosts'),
       api('/api/credentials'),
       api('/api/snippets'),
       api('/api/tunnels'),
+      api('/api/playbooks'),
     ]);
-    set({ hosts: h.hosts, credentials: c.credentials, snippets: s.snippets, tunnels: t.tunnels });
+    set({
+      hosts: h.hosts,
+      credentials: c.credentials,
+      snippets: s.snippets,
+      tunnels: t.tunnels,
+      playbooks: p.playbooks,
+    });
+  },
+
+  setPendingPlaybook(tabId, playbookId) {
+    set((s) => ({ pendingPlaybooks: { ...s.pendingPlaybooks, [tabId]: playbookId } }));
+  },
+  clearPendingPlaybook(tabId) {
+    set((s) => {
+      const p = { ...s.pendingPlaybooks };
+      delete p[tabId];
+      return { pendingPlaybooks: p };
+    });
+  },
+  setLocked(v) {
+    set({ locked: v });
   },
 
   openTab(target, title, color = '') {
@@ -92,6 +116,13 @@ export const useStore = create((set, get) => ({
   },
 
   closeTab(id) {
+    // Explicit close kills server-side sessions (vs navigation, which detaches)
+    const st = get();
+    for (const [key, sender] of Object.entries(st.paneSenders)) {
+      if (key.startsWith(id + ':')) {
+        try { sender.closeSession?.(); } catch {}
+      }
+    }
     set((s) => {
       const tabs = s.tabs.filter((t) => t.id !== id);
       const paneSenders = { ...s.paneSenders };

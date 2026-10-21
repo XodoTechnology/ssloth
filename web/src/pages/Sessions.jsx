@@ -181,6 +181,14 @@ export default function Sessions() {
       <div className="min-w-0 flex-1">
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {h.name}
+          {h.shared === 1 && (
+            <span
+              className="shrink-0 rounded bg-violet-950 px-1 py-px text-[9px] font-medium text-violet-300 uppercase"
+              title={h.owned ? 'shared with the team' : `shared by ${h.owner_name || 'a teammate'}`}
+            >
+              {h.owned ? 'shared' : `from ${h.owner_name || 'team'}`}
+            </span>
+          )}
           {h.region && (
             <span className="shrink-0 rounded bg-ink-800 px-1 py-px text-[9px] font-medium text-sky-400 uppercase">
               {h.region}
@@ -210,46 +218,50 @@ export default function Sessions() {
         )}
       </div>
       <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-        <button
-          className={`p-1 ${h.pinned ? 'text-amber-400' : 'text-zinc-500 hover:text-amber-400'}`}
-          title={h.pinned ? 'Unpin' : 'Pin to top'}
-          onClick={(e) => {
-            e.stopPropagation();
-            togglePin(h);
-          }}
-        >
-          <Star size={13} className={h.pinned ? 'fill-amber-400' : ''} />
-        </button>
-        <button
-          className="p-1 text-zinc-500 hover:text-zinc-200"
-          title="Duplicate"
-          onClick={(e) => {
-            e.stopPropagation();
-            duplicateHost(h);
-          }}
-        >
-          <Copy size={13} />
-        </button>
-        <button
-          className="p-1 text-zinc-500 hover:text-zinc-200"
-          title="Edit"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditing(h);
-          }}
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          className="p-1 text-zinc-500 hover:text-red-400"
-          title="Delete"
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteHost(h);
-          }}
-        >
-          <Trash2 size={13} />
-        </button>
+        {h.owned !== false && (
+          <>
+            <button
+              className={`p-1 ${h.pinned ? 'text-amber-400' : 'text-zinc-500 hover:text-amber-400'}`}
+              title={h.pinned ? 'Unpin' : 'Pin to top'}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin(h);
+              }}
+            >
+              <Star size={13} className={h.pinned ? 'fill-amber-400' : ''} />
+            </button>
+            <button
+              className="p-1 text-zinc-500 hover:text-zinc-200"
+              title="Duplicate"
+              onClick={(e) => {
+                e.stopPropagation();
+                duplicateHost(h);
+              }}
+            >
+              <Copy size={13} />
+            </button>
+            <button
+              className="p-1 text-zinc-500 hover:text-zinc-200"
+              title="Edit"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditing(h);
+              }}
+            >
+              <Pencil size={13} />
+            </button>
+            <button
+              className="p-1 text-zinc-500 hover:text-red-400"
+              title="Delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteHost(h);
+              }}
+            >
+              <Trash2 size={13} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

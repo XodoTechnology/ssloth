@@ -9,6 +9,8 @@ import {
   Settings as SettingsIcon,
   LogOut,
   Disc3,
+  ListChecks,
+  Lock,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -19,6 +21,7 @@ const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
   { to: '/vault', label: 'Vault', icon: KeyRound },
   { to: '/snippets', label: 'Snippets', icon: Zap },
+  { to: '/playbooks', label: 'Playbooks', icon: ListChecks },
   { to: '/tunnels', label: 'Tunnels', icon: ArrowRightLeft },
   { to: '/recordings', label: 'Recordings', icon: Disc3 },
   { to: '/audit', label: 'Audit Log', icon: ScrollText },
@@ -94,9 +97,18 @@ export default function Layout() {
             <div className="text-sm text-zinc-200 truncate">{user?.username}</div>
             <div className="text-[11px] text-zinc-500">{user?.is_admin ? 'administrator' : 'user'}</div>
           </div>
-          <button className="btn-ghost !px-2" title="Sign out" onClick={logout}>
-            <LogOut size={15} />
-          </button>
+          <div className="flex items-center">
+            <button
+              className="btn-ghost !px-2"
+              title="Lock screen"
+              onClick={() => useStore.getState().setLocked(true)}
+            >
+              <Lock size={15} />
+            </button>
+            <button className="btn-ghost !px-2" title="Sign out" onClick={logout}>
+              <LogOut size={15} />
+            </button>
+          </div>
         </div>
       </aside>
       <main className="flex-1 min-w-0 flex flex-col bg-ink-950">

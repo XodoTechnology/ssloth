@@ -13,6 +13,7 @@ import {
   Columns2,
   Square,
   FileDown,
+  Play,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -27,11 +28,13 @@ export default function TerminalView({ tab, active }) {
   const [showSearch, setShowSearch] = useState(false);
   const [searchQ, setSearchQ] = useState('');
   const [showShare, setShowShare] = useState(false);
+  const [showPlaybooks, setShowPlaybooks] = useState(false);
   const [splitPicker, setSplitPicker] = useState(false);
   const [varPrompt, setVarPrompt] = useState(null); // {snippet, vars, execute}
   const [varValues, setVarValues] = useState({});
 
   const snippets = useStore((s) => s.snippets);
+  const playbooks = useStore((s) => s.playbooks);
   const hosts = useStore((s) => s.hosts);
   const closeTab = useStore((s) => s.closeTab);
   const setPaneState = useStore((s) => s.setPaneState);
@@ -51,6 +54,19 @@ export default function TerminalView({ tab, active }) {
   const broadcasting = broadcastTabId === tab.id;
 
   const sender = () => activeSender(tab.id);
+
+  // Ctrl+F opens the scrollback search for this tab while it's visible.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setShowSearch(true);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [active]);
 
   const runSnippet = (snip, execute) => {
     setShowSnippets(false);
@@ -137,6 +153,16 @@ export default function TerminalView({ tab, active }) {
             <Disc3 size={10} className="animate-spin" /> rec
           </span>
         )}
+        {pstate.playbook && (
+          <span
+            className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+              pstate.playbook.status === 'fail' ? 'bg-red-950 text-red-300' : 'bg-sky-950 text-sky-300'
+            }`}
+            title={pstate.playbook.command}
+          >
+            playbook {pstate.playbook.index + 1}/{pstate.playbook.total}
+          </span>
+        )}
         <div className="flex-1" />
 
         <div className="relative">
@@ -171,10 +197,42 @@ export default function TerminalView({ tab, active }) {
           )}
         </div>
 
+        <div className="relative">
+          <button
+            className="btn-ghost !py-1 !px-2 text-xs"
+            onClick={() => setShowPlaybooks((v) => !v)}
+            disabled={status !== 'ready'}
+            title="Run playbook"
+          >
+            <Play size={14} />
+          </button>
+          {showPlaybooks && (
+            <div className="absolute right-0 top-8 z-30 w-72 card shadow-xl max-h-80 overflow-y-auto">
+              {playbooks.length === 0 && (
+                <div className="p-3 text-xs text-zinc-500">
+                  no playbooks yet — build them in the Playbooks page
+                </div>
+              )}
+              {playbooks.map((p) => (
+                <button
+                  key={p.id}
+                  className="w-full text-left px-3 py-2 hover:bg-ink-800"
+                  onClick={() => {
+                    setShowPlaybooks(false);
+                    sender()?.sendJson?.({ type: 'playbook', playbookId: p.id });
+                  }}
+                >
+                  <div className="text-xs text-zinc-200 truncate">{p.name}</div>
+                  <div className="text-[10px] text-zinc-500">{p.steps?.length || 0} steps</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           className="btn-ghost !py-1 !px-2 text-xs"
           onClick={() => setShowSearch((v) => !v)}
-          title="Search scrollback"
+          title="Search scrollback (Ctrl+F)"
         >
           <Search size={14} />
         </button>
@@ -296,6 +354,13 @@ export default function TerminalView({ tab, active }) {
       <div className="flex items-center gap-3 px-3 h-6 border-t border-ink-800 bg-ink-900/40 text-[11px] text-zinc-500 shrink-0">
         <span className="truncate">{tab.title}</span>
         {panes.length > 1 && <span>{panes.length} panes</span>}
+        {pstate.health && status === 'ready' && (
+          <span className="font-mono text-[10px] text-zinc-500" title="remote load · memory · root disk">
+            {pstate.health.load ? `load ${pstate.health.load.map((l) => l.toFixed(2)).join(' ')}` : ''}
+            {pstate.health.memPct != null ? ` · mem ${pstate.health.memPct}%` : ''}
+            {pstate.health.diskPct != null ? ` · disk ${pstate.health.diskPct}%` : ''}
+          </span>
+        )}
         <span className="ml-auto">
           {status === 'ready' ? 'ssh channel open' : status}
           {pstate.rtt != null && status === 'ready' ? ` · ${pstate.rtt}ms` : ''}

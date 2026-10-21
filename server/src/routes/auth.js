@@ -132,6 +132,17 @@ router.post('/password', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Lock-screen verification — checks the current user's password without
+// touching the session (unlike /login: no cookie, no TOTP). For the idle
+// lock overlay, not for authentication.
+router.post('/verify', requireAuth, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+    return res.status(403).json({ error: 'wrong password' });
+  }
+  res.json({ ok: true });
+});
+
 // ---- Desktop quick-unlock PIN ----
 
 const PIN_RE = /^\d{4,8}$/;

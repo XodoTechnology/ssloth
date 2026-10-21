@@ -6,7 +6,7 @@ const { getSession, getSftp } = require('../ssh/manager');
 const { auditReq } = require('../auth');
 
 const router = express.Router();
-const json = express.json({ limit: '64kb' });
+const json = express.json({ limit: '1500kb' });
 
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
@@ -76,6 +76,68 @@ router.get('/:sid/list', async (req, res) => {
     res.json({ path: real, entries });
   } catch (e) {
     sftpError(res, e, 'list failed');
+  }
+});
+
+const READ_CAP = 1024 * 1024; // editor/preview cap
+
+function looksBinary(buf) {
+  const n = Math.min(buf.length, 8192);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
+// Read a small file into memory — powers the in-app editor and previews.
+// Returns {path, size, binary, content?} — content is utf8 text when not binary.
+router.get('/:sid/read', async (req, res) => {
+  const ctx = await requireSftp(req, res);
+  if (!ctx) return;
+  const p = cleanPathParam(req.query.path);
+  if (p === null || p === '.') return res.status(400).json({ error: 'bad path' });
+  try {
+    const st = await pStat(ctx.sftp, p);
+    if ((st.mode & S_IFMT) === S_IFDIR) return res.status(400).json({ error: 'cannot read a directory' });
+    if (st.size > READ_CAP) {
+      return res.json({ path: p, size: st.size, binary: true, too_large: true });
+    }
+    const buf = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const rs = ctx.sftp.createReadStream(p);
+      rs.on('data', (c) => chunks.push(c));
+      rs.on('error', reject);
+      rs.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+    if (looksBinary(buf)) return res.json({ path: p, size: buf.length, binary: true });
+    auditReq(req, 'sftp.read', `${ctx.session.label}:${p}`);
+    res.json({ path: p, size: buf.length, binary: false, content: buf.toString('utf8') });
+  } catch (e) {
+    sftpError(res, e, 'read failed');
+  }
+});
+
+// Write text content back — the editor's save.
+router.post('/:sid/write', json, async (req, res) => {
+  const ctx = await requireSftp(req, res);
+  if (!ctx) return;
+  const p = cleanPathParam(req.body?.path);
+  const content = req.body?.content;
+  if (p === null || p === '.' || typeof content !== 'string') {
+    return res.status(400).json({ error: 'path and content required' });
+  }
+  if (Buffer.byteLength(content) > READ_CAP) {
+    return res.status(400).json({ error: 'content too large' });
+  }
+  try {
+    const ws = ctx.sftp.createWriteStream(p);
+    await new Promise((resolve, reject) => {
+      ws.on('error', reject);
+      ws.on('close', resolve);
+      ws.end(content, 'utf8');
+    });
+    auditReq(req, 'sftp.write', `${ctx.session.label}:${p}`);
+    res.json({ ok: true });
+  } catch (e) {
+    sftpError(res, e, 'write failed');
   }
 });
 

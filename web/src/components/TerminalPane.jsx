@@ -4,16 +4,19 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
-import { ShieldAlert, KeyRound, CloudUpload } from 'lucide-react';
+import { ShieldAlert, KeyRound, CloudUpload, ClipboardPaste } from 'lucide-react';
 import { useStore } from '../store';
 import { uploadToSession } from '../transfers';
 import { termOptions } from '../termThemes';
 import Modal from './Modal';
 
 const encoder = new TextEncoder();
+const PASTE_GUARD_LINES = 4; // pastes with more lines than this get a confirm
 
-// One pane = one xterm + one SSH session. Reports its state upward via
-// onPaneState(tabId, paneId, {status, sessionId, label, recording}).
+// One pane = one xterm + one SSH session. Sessions are persistent server-
+// side: unmounting detaches (processes keep running), remounting reattaches
+// via the stored sessionId + scrollback replay. Unexpected socket drops
+// auto-reconnect with backoff.
 export default function TerminalPane({ tab, pane, active, focused, onFocus, onPaneState }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -22,11 +25,16 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   const wsRef = useRef(null);
   const sessionRef = useRef(null);
   const reconnectSeq = useRef(0);
+  const mountedRef = useRef(true);
+  const intentionalRef = useRef(false);
+  const retryRef = useRef({ attempt: 0, timer: null });
+  const reattachRef = useRef(false);
 
   const [hostkey, setHostkey] = useState(null);
   const [authPrompt, setAuthPrompt] = useState(null);
   const [password, setPassword] = useState('');
   const [fileDrag, setFileDrag] = useState(false);
+  const [pasteConfirm, setPasteConfirm] = useState(null); // {text, lines, preview}
   const stateRef = useRef({ status: 'idle' });
   const activeRef = useRef(active);
 
@@ -44,7 +52,24 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     onPaneState(tab.id, pane.id, stateRef.current);
   }
 
+  // Multi-line pastes get a confirmation — protects against clipboard-hijack
+  // payloads and accidental dumps of shell scripts into prod.
+  function guardedPaste(text) {
+    if (!text) return;
+    const lines = text.split('\n').length;
+    if (lines <= PASTE_GUARD_LINES) {
+      termRef.current?.paste(text);
+      return;
+    }
+    setPasteConfirm({
+      text,
+      lines,
+      preview: text.split('\n').slice(0, 6).join('\n'),
+    });
+  }
+
   useEffect(() => {
+    mountedRef.current = true;
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -93,12 +118,19 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
       e.preventDefault();
       navigator.clipboard
         ?.readText()
-        .then((text) => {
-          if (text) term.paste(text);
-        })
+        .then((text) => guardedPaste(text))
         .catch(() => toast('clipboard read blocked — use Ctrl+V', 'info'));
     };
+    // Route ALL pastes (Ctrl+V, browser menu) through the guard. Capture phase
+    // runs before xterm's own paste handler on its hidden textarea.
+    const onPasteCapture = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('text');
+      guardedPaste(text);
+    };
     containerRef.current.addEventListener('contextmenu', onContextMenu);
+    containerRef.current.addEventListener('paste', onPasteCapture, true);
 
     registerPane(tab.id, pane.id, {
       send: (text) => {
@@ -109,7 +141,22 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
         const ws = wsRef.current;
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
       },
-      reconnect: () => connect(),
+      reconnect: () => {
+        intentionalRef.current = false;
+        clearTimeout(retryRef.current.timer);
+        try { wsRef.current?.close(); } catch {}
+        open();
+      },
+      closeSession: () => {
+        // explicit kill — session dies server-side, no reattach
+        intentionalRef.current = true;
+        clearTimeout(retryRef.current.timer);
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'close' })); } catch {}
+        }
+        try { ws?.close(); } catch {}
+      },
       search: (q, dir) => (dir === 'prev' ? search.findPrevious(q) : search.findNext(q)),
       getTerm: () => term,
     });
@@ -125,13 +172,22 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     });
     ro.observe(containerRef.current);
 
-    connect();
+    // Restore a detached session if this pane had one before unmount.
+    const prior = useStore.getState().paneStates[`${tab.id}:${pane.id}`];
+    if (prior?.sessionId) {
+      sessionRef.current = prior.sessionId;
+      reattachRef.current = true;
+    }
+    open();
 
     return () => {
+      mountedRef.current = false;
+      clearTimeout(retryRef.current.timer);
       ro.disconnect();
       containerRef.current?.removeEventListener('contextmenu', onContextMenu);
+      containerRef.current?.removeEventListener('paste', onPasteCapture, true);
       try {
-        wsRef.current?.close();
+        wsRef.current?.close(); // detaches the session — it keeps running
       } catch {}
       term.dispose();
     };
@@ -147,19 +203,38 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     }
   }, [active]);
 
-  function connect() {
+  function scheduleRetry() {
+    const r = retryRef.current;
+    r.attempt = Math.min(r.attempt + 1, 12);
+    const delay = Math.min(1000 * r.attempt, 15000);
+    setPaneState({
+      status: 'connecting',
+      statusMsg: `connection lost — reconnecting in ${Math.ceil(delay / 1000)}s`,
+      sessionId: sessionRef.current,
+    });
+    r.timer = setTimeout(() => {
+      if (mountedRef.current) open();
+    }, delay);
+  }
+
+  function open() {
     const term = termRef.current;
-    setPaneState({ status: 'connecting', sessionId: null });
+    setPaneState({ status: 'connecting', statusMsg: sessionRef.current ? 'reattaching…' : 'connecting…' });
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws/terminal`);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     const seq = ++reconnectSeq.current;
     let pingTimer = null;
+    intentionalRef.current = false;
 
     ws.onopen = () => {
       const { cols, rows } = term || { cols: 80, rows: 24 };
-      ws.send(JSON.stringify({ type: 'connect', ...pane.target, cols, rows }));
+      if (sessionRef.current) {
+        ws.send(JSON.stringify({ type: 'reattach', sessionId: sessionRef.current, cols, rows }));
+      } else {
+        ws.send(JSON.stringify({ type: 'connect', ...pane.target, cols, rows }));
+      }
     };
 
     ws.onmessage = (ev) => {
@@ -176,9 +251,19 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
       switch (msg.type) {
         case 'status':
           setPaneState({ statusMsg: msg.message || '' });
-          if (msg.state === 'error') setPaneState({ status: 'error' });
-          else if (msg.state === 'closed') setPaneState({ status: 'closed' });
-          else setPaneState({ status: msg.state });
+          if (msg.state === 'error') {
+            sessionRef.current = null;
+            setPaneState({ status: 'error', sessionId: null });
+          } else if (msg.state === 'closed') {
+            setPaneState({ status: 'closed' });
+          } else if (msg.state === 'gone') {
+            // reattach missed — session died server-side; fall back to a
+            // fresh connect on the same socket.
+            sessionRef.current = null;
+            reattachRef.current = false;
+            const { cols, rows } = term || { cols: 80, rows: 24 };
+            ws.send(JSON.stringify({ type: 'connect', ...pane.target, cols, rows }));
+          } else setPaneState({ status: msg.state });
           break;
         case 'hostkey':
           setPaneState({ statusMsg: `verifying host key for ${msg.hostname}` });
@@ -190,11 +275,27 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
           break;
         case 'ready':
           sessionRef.current = msg.sessionId;
-          setPaneState({ status: 'ready', sessionId: msg.sessionId, label: msg.label, statusMsg: '' });
+          retryRef.current.attempt = 0;
+          setPaneState({
+            status: 'ready',
+            sessionId: msg.sessionId,
+            label: msg.label,
+            statusMsg: msg.reattached ? 'session restored' : '',
+          });
           term?.focus();
+          clearInterval(pingTimer);
           pingTimer = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
           }, 4000);
+          // a playbook queued from the Playbooks page fires once we're ready
+          {
+            const st = useStore.getState();
+            const pbId = st.pendingPlaybooks[tab.id];
+            if (pbId) {
+              st.clearPendingPlaybook(tab.id);
+              ws.send(JSON.stringify({ type: 'playbook', playbookId: pbId }));
+            }
+          }
           break;
         case 'pong':
           setPaneState({ rtt: Date.now() - msg.t });
@@ -202,18 +303,32 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
         case 'recording':
           setPaneState({ recording: msg.on });
           break;
+        case 'health':
+          setPaneState({ health: { load: msg.load, memPct: msg.memPct, diskPct: msg.diskPct } });
+          break;
+        case 'playbook_step':
+          setPaneState({ playbook: { index: msg.index, total: msg.total, status: msg.status, command: msg.command } });
+          break;
+        case 'playbook_done':
+          setPaneState({ playbook: null });
+          toast(msg.aborted ? 'playbook stopped' : msg.ok ? 'playbook finished' : 'playbook failed', msg.ok ? 'success' : 'error');
+          break;
       }
     };
 
     ws.onclose = () => {
       clearInterval(pingTimer);
       if (reconnectSeq.current !== seq) return;
-      setPaneState({
-        status: stateRef.current.status === 'error' ? 'error' : 'closed',
-        sessionId: null,
-        recording: false,
-      });
-      sessionRef.current = null;
+      if (!mountedRef.current || intentionalRef.current) {
+        setPaneState({
+          status: stateRef.current.status === 'error' ? 'error' : 'closed',
+          sessionId: sessionRef.current,
+          recording: false,
+        });
+        return;
+      }
+      // unexpected drop — the session likely still lives server-side
+      scheduleRetry();
     };
     ws.onerror = () => setPaneState({ statusMsg: 'websocket error' });
   }
@@ -363,6 +478,38 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {pasteConfirm && (
+        <Modal title="Confirm paste" onClose={() => setPasteConfirm(null)}>
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 text-amber-300 text-sm">
+              <ClipboardPaste size={18} className="shrink-0 mt-0.5" />
+              <p>
+                You're about to paste <span className="font-semibold">{pasteConfirm.lines} lines</span> into the
+                terminal — they'll execute as typed.
+              </p>
+            </div>
+            <pre className="rounded-md bg-ink-900 border border-ink-700 p-3 font-mono text-xs text-zinc-400 max-h-40 overflow-auto whitespace-pre-wrap">
+              {pasteConfirm.preview}
+              {pasteConfirm.lines > 6 ? '\n…' : ''}
+            </pre>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setPasteConfirm(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  termRef.current?.paste(pasteConfirm.text);
+                  setPasteConfirm(null);
+                }}
+              >
+                Paste {pasteConfirm.lines} lines
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

@@ -30,6 +30,7 @@ const tunnelRoutes = require('./routes/tunnels');
 const sftpRoutes = require('./routes/sftp');
 const adminRoutes = require('./routes/admin');
 const recordingRoutes = require('./routes/recordings');
+const playbookRoutes = require('./routes/playbooks');
 const backupRoutes = require('./routes/backup');
 const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./routes/shares');
 
@@ -87,6 +88,7 @@ app.use('/api/snippets', requireAuth, snippetRoutes);
 app.use('/api/tunnels', requireAuth, tunnelRoutes);
 app.use('/api/shares', requireAuth, shareRoutes);
 app.use('/api/recordings', requireAuth, recordingRoutes);
+app.use('/api/playbooks', requireAuth, playbookRoutes);
 app.use('/api/vault', requireAuth, backupRoutes);
 app.use('/api/admin', requireAuth, adminRoutes);
 // Public read-only metadata for share links (token in path is the credential).

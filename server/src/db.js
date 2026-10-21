@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS recordings (
 );
 CREATE INDEX IF NOT EXISTS idx_recordings_user ON recordings(user_id);
 
+CREATE TABLE IF NOT EXISTS playbooks (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  steps       TEXT NOT NULL DEFAULT '[]',   -- JSON: [{command, description}]
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_playbooks_user ON playbooks(user_id);
+
 CREATE TABLE IF NOT EXISTS audit (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER,
@@ -150,6 +161,8 @@ ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');
 ensureColumn('hosts', 'region', "region TEXT NOT NULL DEFAULT ''");
 ensureColumn('hosts', 'tags', "tags TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', 'pin_hash', 'pin_hash TEXT');
+ensureColumn('hosts', 'shared', 'shared INTEGER NOT NULL DEFAULT 0');
+ensureColumn('tunnels', 'type', "type TEXT NOT NULL DEFAULT 'local' CHECK (type IN ('local','dynamic'))");
 
 function audit(user, action, detail, req) {
   try {

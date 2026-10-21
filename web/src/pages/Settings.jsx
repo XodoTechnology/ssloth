@@ -34,6 +34,7 @@ export default function Settings() {
   const [fontSize, setFontSize] = useState(localStorage.getItem('ssloth.termFontSize') || '13');
   const [termTheme, setTermTheme] = useState(localStorage.getItem('ssloth.termTheme') || 'dark');
   const [pinForm, setPinForm] = useState({ pin: '', password: '' });
+  const [idleMin, setIdleMin] = useState(localStorage.getItem('ssloth_idle_min') || '0');
   const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
@@ -394,6 +395,34 @@ export default function Settings() {
             {hostkeys.length === 0 && (
               <div className="py-4 text-center text-xs text-zinc-600">no trusted host keys yet</div>
             )}
+          </div>
+        </section>
+
+        {/* idle auto-lock */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Lock size={15} className="text-emerald-400" /> Idle auto-lock
+          </h2>
+          <div className="flex items-center gap-3">
+            <select
+              className="input !w-48"
+              value={idleMin}
+              onChange={(e) => {
+                setIdleMin(e.target.value);
+                localStorage.setItem('ssloth_idle_min', e.target.value);
+                toast(e.target.value === '0' ? 'auto-lock off' : `locks after ${e.target.value} min idle`, 'success');
+              }}
+            >
+              <option value="0">Off</option>
+              <option value="5">5 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+            </select>
+            <span className="text-[11px] text-zinc-500">
+              locks the screen after inactivity — SSH sessions keep running; unlock with
+              {desktop && pinSet ? ' your PIN or ' : ' '}account password
+            </span>
           </div>
         </section>
 

@@ -4,10 +4,12 @@ import { api } from './api';
 import { useStore } from './store';
 import Layout from './components/Layout';
 import Toasts from './components/Toasts';
+import IdleLock from './components/IdleLock';
 import Login from './pages/Login';
 import Sessions from './pages/Sessions';
 import Vault from './pages/Vault';
 import Snippets from './pages/Snippets';
+import Playbooks from './pages/Playbooks';
 import Tunnels from './pages/Tunnels';
 import Settings from './pages/Settings';
 import Audit from './pages/Audit';
@@ -19,6 +21,9 @@ export default function App() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
     api('/api/auth/state')
       .then((s) => {
         useStore.setState({
@@ -71,6 +76,7 @@ export default function App() {
           <Route index element={<Sessions />} />
           <Route path="/vault" element={<Vault />} />
           <Route path="/snippets" element={<Snippets />} />
+          <Route path="/playbooks" element={<Playbooks />} />
           <Route path="/tunnels" element={<Tunnels />} />
           <Route path="/recordings" element={<Recordings />} />
           <Route path="/audit" element={<Audit />} />
@@ -78,6 +84,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
+      <IdleLock />
       <Toasts />
     </>
   );

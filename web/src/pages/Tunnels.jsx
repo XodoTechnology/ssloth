@@ -55,9 +55,18 @@ export default function Tunnels() {
             <div key={t.id} className="flex items-center gap-3 px-4 py-3">
               <span className={`h-2 w-2 rounded-full ${t.active ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
               <div className="min-w-0 flex-1">
-                <div className="text-sm text-zinc-100">{t.name}</div>
+                <div className="text-sm text-zinc-100">
+                  {t.name}
+                  {t.type === 'dynamic' && (
+                    <span className="ml-2 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-sky-950 text-sky-300">
+                      socks5
+                    </span>
+                  )}
+                </div>
                 <div className="font-mono text-[11px] text-zinc-500">
-                  {t.bind_address}:{t.local_port} → {t.remote_host}:{t.remote_port} via {hostName(t.host_id)}
+                  {t.type === 'dynamic'
+                    ? `${t.bind_address}:${t.local_port} → dynamic via ${hostName(t.host_id)}`
+                    : `${t.bind_address}:${t.local_port} → ${t.remote_host}:${t.remote_port} via ${hostName(t.host_id)}`}
                 </div>
               </div>
               <button
@@ -90,6 +99,7 @@ function TunnelModal({ onClose }) {
   const { hosts, refreshAll, toast } = useStore();
   const [form, setForm] = useState({
     name: '',
+    type: 'local',
     host_id: hosts[0]?.id || '',
     bind_address: '127.0.0.1',
     local_port: '',
@@ -109,11 +119,12 @@ function TunnelModal({ onClose }) {
         method: 'POST',
         body: {
           name: form.name,
+          type: form.type,
           host_id: parseInt(form.host_id, 10),
           bind_address: form.bind_address,
           local_port: parseInt(form.local_port, 10),
           remote_host: form.remote_host,
-          remote_port: parseInt(form.remote_port, 10),
+          remote_port: parseInt(form.remote_port, 10) || 0,
         },
       });
       toast('tunnel created', 'success');
@@ -127,11 +138,20 @@ function TunnelModal({ onClose }) {
   };
 
   return (
-    <Modal title="New local port forward" onClose={onClose}>
+    <Modal title="New tunnel" onClose={onClose}>
       <form onSubmit={save} className="space-y-3">
-        <div>
-          <label className="label">Name</label>
-          <input className="input" value={form.name} onChange={set('name')} placeholder="grafana on prod" autoFocus />
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Name</label>
+            <input className="input" value={form.name} onChange={set('name')} placeholder="grafana on prod" autoFocus />
+          </div>
+          <div>
+            <label className="label">Type</label>
+            <select className="input" value={form.type} onChange={set('type')}>
+              <option value="local">Local forward</option>
+              <option value="dynamic">SOCKS5 proxy (dynamic)</option>
+            </select>
+          </div>
         </div>
         <div>
           <label className="label">Through host</label>
@@ -153,16 +173,23 @@ function TunnelModal({ onClose }) {
             <input className="input font-mono" type="number" value={form.local_port} onChange={set('local_port')} placeholder="3000" />
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Remote host</label>
-            <input className="input font-mono" value={form.remote_host} onChange={set('remote_host')} placeholder="127.0.0.1" />
+        {form.type === 'local' ? (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Remote host</label>
+              <input className="input font-mono" value={form.remote_host} onChange={set('remote_host')} placeholder="127.0.0.1" />
+            </div>
+            <div>
+              <label className="label">Remote port</label>
+              <input className="input font-mono" type="number" value={form.remote_port} onChange={set('remote_port')} placeholder="3000" />
+            </div>
           </div>
-          <div>
-            <label className="label">Remote port</label>
-            <input className="input font-mono" type="number" value={form.remote_port} onChange={set('remote_port')} placeholder="3000" />
-          </div>
-        </div>
+        ) : (
+          <p className="text-[11px] text-zinc-400 rounded-md border border-sky-900 bg-sky-950/40 px-3 py-2">
+            SOCKS5: point your browser/app's proxy at {form.bind_address || '127.0.0.1'}:{form.local_port || 'PORT'} —
+            all requests dial out through {hosts.find((h) => h.id === +form.host_id)?.name || 'the host'}.
+          </p>
+        )}
         <p className="text-[11px] text-zinc-500">
           keep the bind address on 127.0.0.1 unless you intentionally want the tunnel reachable by other machines.
         </p>
@@ -175,7 +202,13 @@ function TunnelModal({ onClose }) {
           </button>
           <button
             className="btn-primary"
-            disabled={busy || !form.name || !form.host_id || !form.local_port || !form.remote_port || !form.remote_host}
+            disabled={
+              busy ||
+              !form.name ||
+              !form.host_id ||
+              !form.local_port ||
+              (form.type === 'local' && (!form.remote_port || !form.remote_host))
+            }
           >
             {busy ? '…' : 'Create'}
           </button>

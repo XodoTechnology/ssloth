@@ -63,7 +63,12 @@ function resolveConnectSpec(userId, input) {
     };
   }
 
-  const host = db.prepare('SELECT * FROM hosts WHERE id = ? AND user_id = ?').get(input.hostId, userId);
+  // Saved hosts: visible if owned, or flagged shared by another user.
+  // Shared hosts can be *used* (secrets stay server-side, never sent to the
+  // connecting user) but are read-only — mutations still require ownership.
+  const host = db
+    .prepare('SELECT * FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)')
+    .get(input.hostId, userId);
   if (!host) throw Object.assign(new Error('host not found'), { code: 'host_not_found' });
 
   const spec = {
@@ -79,9 +84,11 @@ function resolveConnectSpec(userId, input) {
   };
 
   if (host.auth_type === 'credential' && host.credential_id) {
-    const cred = db
-      .prepare('SELECT * FROM credentials WHERE id = ? AND user_id = ?')
-      .get(host.credential_id, userId);
+    // On a shared host the credential belongs to the owner — the secret is
+    // decrypted only inside this process and never leaves the server.
+    const cred = host.shared
+      ? db.prepare('SELECT * FROM credentials WHERE id = ?').get(host.credential_id)
+      : db.prepare('SELECT * FROM credentials WHERE id = ? AND user_id = ?').get(host.credential_id, userId);
     if (!cred) throw Object.assign(new Error('credential not found'), { code: 'credential_not_found' });
     const secret = JSON.parse(decryptSecret(cred.secret_enc));
     if (cred.type === 'key') {
@@ -154,7 +161,10 @@ function tryConnect(userId, spec, opts = {}) {
               expected: stored.fingerprint,
             });
           }
-          if (opts.acceptedKeyB64 !== keyB64) {
+          const accepted =
+            opts.acceptedKeyB64 === keyB64 ||
+            opts.acceptedKeys?.[`${spec.hostname}:${spec.port}`] === keyB64;
+          if (!accepted) {
             return fail('unknown_hostkey', 'Unknown host key', {
               fingerprint,
               keyB64,
@@ -188,6 +198,7 @@ function tryConnect(userId, spec, opts = {}) {
           const keyB64 = buf.toString('base64');
           presented = { key: buf, algo: keyAlgorithm(buf) };
           if (opts.acceptedKeyB64 && opts.acceptedKeyB64 === keyB64) return true;
+          if (opts.acceptedKeys?.[`${spec.hostname}:${spec.port}`] === keyB64) return true;
           const stored = getStoredHostKey(userId, spec.hostname, spec.port);
           return !!stored && stored.key_b64 === keyB64;
         },
@@ -195,51 +206,84 @@ function tryConnect(userId, spec, opts = {}) {
   });
 }
 
-// Connect to spec, optionally hopping through a saved bastion host
-// (ProxyJump). Host-key verification applies per hop: the bastion is
-// verified under its own hostname:port, the target under its own.
-// Errors from the bastion hop carry hopSpec so the caller can display the
+// Connect to spec, hopping through bastion hosts (ProxyJump). Chains are
+// recursive: a bastion may itself sit behind another bastion, giving
+// A -> B -> target hop chains. Host-key verification applies per hop and
+// per-hop one-shot accepts live in opts.acceptedKeys['host:port'].
+// Errors from a bastion hop carry hopSpec so the caller can display the
 // right fingerprint in the trust prompt.
+const MAX_HOPS = 8;
+
+function buildChain(userId, spec) {
+  const hops = [];
+  const seen = new Set(spec.hostId ? [spec.hostId] : []);
+  let cursor = spec;
+  while (cursor.jumpHostId) {
+    if (hops.length >= MAX_HOPS) {
+      throw Object.assign(new Error(`bastion chain too long (max ${MAX_HOPS} hops)`), { code: 'error' });
+    }
+    const hop = resolveConnectSpec(userId, { hostId: cursor.jumpHostId });
+    if (seen.has(hop.hostId)) {
+      throw Object.assign(new Error('bastion chain contains a cycle'), { code: 'error' });
+    }
+    seen.add(hop.hostId);
+    if (!hop.password && !hop.privateKey) {
+      throw Object.assign(
+        new Error(`bastion '${hop.label}' has no stored credential — it can't prompt interactively`),
+        { code: 'error' }
+      );
+    }
+    hops.push(hop);
+    cursor = hop;
+  }
+  return hops.reverse(); // outermost bastion first
+}
+
 async function establishConn(userId, spec, opts = {}) {
-  if (!spec.jumpHostId) return tryConnect(userId, spec, opts);
+  const hops = buildChain(userId, spec);
+  if (!hops.length) return tryConnect(userId, spec, opts);
 
-  const jumpSpec = resolveConnectSpec(userId, { hostId: spec.jumpHostId });
-  if (jumpSpec.jumpHostId) {
-    throw Object.assign(new Error('nested bastion hops are not supported (max 1 jump)'), { code: 'error' });
-  }
-  if (!jumpSpec.password && !jumpSpec.privateKey) {
-    throw Object.assign(
-      new Error(`bastion '${jumpSpec.label}' has no stored credential — it can't prompt interactively`),
-      { code: 'error' }
-    );
-  }
-
-  let jumpConn;
+  // Connect outermost bastion first, then tunnel inward hop by hop.
+  const conns = [];
+  const cleanup = () => conns.forEach((c) => { try { c.end(); } catch {} });
   try {
-    jumpConn = await tryConnect(userId, jumpSpec, opts.jump || {});
-  } catch (e) {
-    if (e.code === 'unknown_hostkey' || e.code === 'hostkey_mismatch') e.hopSpec = jumpSpec;
-    throw e;
-  }
-
-  try {
+    let prev = null;
+    for (const hop of hops) {
+      const hopOpts = { acceptedKeys: opts.acceptedKeys };
+      if (prev) {
+        hopOpts.sock = await new Promise((resolve, reject) => {
+          prev.forwardOut('127.0.0.1', 0, hop.hostname, hop.port, (err, stream) =>
+            err ? reject(err) : resolve(stream)
+          );
+        });
+      }
+      try {
+        prev = await tryConnect(userId, hop, hopOpts);
+      } catch (e) {
+        if (e.code === 'unknown_hostkey' || e.code === 'hostkey_mismatch') e.hopSpec = hop;
+        throw e;
+      }
+      conns.push(prev);
+    }
     const sock = await new Promise((resolve, reject) => {
-      jumpConn.forwardOut('127.0.0.1', 0, spec.hostname, spec.port, (err, stream) =>
+      prev.forwardOut('127.0.0.1', 0, spec.hostname, spec.port, (err, stream) =>
         err ? reject(err) : resolve(stream)
       );
     });
     const conn = await tryConnect(userId, spec, { ...opts, sock });
-    conn.on('close', () => {
-      try { jumpConn.end(); } catch {}
-    });
+    conn.on('close', cleanup);
     return conn;
   } catch (e) {
-    try { jumpConn.end(); } catch {}
+    cleanup();
     throw e;
   }
 }
 
 // Create a registered session around an established connection.
+// Sessions are persistent: the owner's WebSocket is attached/detached via
+// session.ws, so closing a tab detaches rather than kills — output keeps
+// buffering in `replay` for reattach. Only an explicit close (or the idle
+// sweep, conn death) destroys the session.
 function createSession(userId, conn, spec) {
   const id = crypto.randomBytes(16).toString('hex');
   const session = {
@@ -254,14 +298,18 @@ function createSession(userId, conn, spec) {
     stream: null,
     viewers: new Map(), // ws -> { mode }
     replay: Buffer.alloc(0),
+    healthTimer: null,
+    playbook: null, // { steps, idx, buf, marker, send }
     createdAt: Date.now(),
     lastUsed: Date.now(),
   };
   sessions.set(id, session);
+  conn.on('error', () => {}); // 'close' follows; prevents unhandled-error crash
   conn.on('close', () => {
     const s = sessions.get(id);
     if (s) {
       sessions.delete(id);
+      if (s.healthTimer) clearInterval(s.healthTimer);
       if (s.recorder) finalizeRecorder(s);
       try { s.ws?.send(JSON.stringify({ type: 'status', state: 'closed', message: 'connection closed' })); } catch {}
       try { s.ws?.close(); } catch {}
@@ -277,20 +325,37 @@ function createSession(userId, conn, spec) {
   return session;
 }
 
-const REPLAY_CAP = 256 * 1024;
+const REPLAY_CAP = 1024 * 1024;
 
-// Send terminal output to all attached share viewers and keep a capped
-// replay buffer so viewers joining late see recent output.
-function broadcastOutput(session, chunk) {
+// Fan a shell chunk to every consumer: the owner's ws (if attached), share
+// viewers, the asciinema recorder, and the capped replay buffer that powers
+// late-joining viewers *and* reattach scrollback.
+function sessionOutput(session, chunk) {
+  session.lastUsed = Date.now(); // live output = activity, don't idle-sweep
   session.replay =
     session.replay.length + chunk.length > REPLAY_CAP
       ? Buffer.concat([session.replay.subarray(-REPLAY_CAP / 2), chunk])
       : Buffer.concat([session.replay, chunk]);
-  for (const ws of session.viewers.keys()) {
+  const ws = session.ws;
+  if (ws && ws.readyState === ws.OPEN) {
+    try { ws.send(chunk, { binary: true }); } catch {}
+  }
+  for (const vws of session.viewers.keys()) {
     try {
-      if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+      if (vws.readyState === vws.OPEN) vws.send(chunk, { binary: true });
     } catch {}
   }
+  if (session.recorder) session.recorder.out(chunk);
+}
+
+// Owner ws lifecycle — detach keeps the session (and its processes) alive.
+function attachWs(session, ws) {
+  session.ws = ws;
+  session.lastUsed = Date.now();
+}
+
+function detachWs(session) {
+  if (session) session.ws = null;
 }
 
 function attachViewer(session, ws, mode) {
@@ -331,10 +396,41 @@ function getSftp(session) {
   return session.sftpPromise;
 }
 
+// Lightweight host health: one exec channel per tick over the existing
+// connection (multiplexed — doesn't disturb the shell). Linux-only metrics;
+// failures are silent (we just don't emit).
+function probeHealth(session) {
+  const ws = session.ws;
+  if (!ws || ws.readyState !== ws.OPEN || !session.conn) return;
+  try {
+    session.conn.exec(
+      'cat /proc/loadavg 2>/dev/null; grep -E "MemTotal|MemAvailable" /proc/meminfo 2>/dev/null; df -P / 2>/dev/null | tail -1',
+      (err, ch) => {
+        if (err) return;
+        let text = '';
+        ch.on('data', (d) => (text += d));
+        ch.on('close', () => {
+          const loadM = text.match(/^([\d.]+) ([\d.]+) ([\d.]+)/m);
+          const memT = text.match(/MemTotal:\s+(\d+) kB/);
+          const memA = text.match(/MemAvailable:\s+(\d+) kB/);
+          const diskM = text.match(/(\d+)%\s+\/\s*$/m);
+          if (!loadM && !memT) return;
+          const msg = { type: 'health' };
+          if (loadM) msg.load = [+loadM[1], +loadM[2], +loadM[3]];
+          if (memT && memA) msg.memPct = Math.round((1 - +memA[1] / +memT[1]) * 100);
+          if (diskM) msg.diskPct = +diskM[1];
+          try { ws.send(JSON.stringify(msg)); } catch {}
+        });
+      }
+    );
+  } catch {}
+}
+
 function destroySession(sessionId) {
   const s = sessions.get(sessionId);
   if (!s) return;
   sessions.delete(sessionId);
+  if (s.healthTimer) clearInterval(s.healthTimer);
   if (s.recorder) finalizeRecorder(s);
   try { s.ws?.close(); } catch {}
   try { s.conn.end(); } catch {}
@@ -361,7 +457,10 @@ module.exports = {
   getSession,
   getSftp,
   destroySession,
-  broadcastOutput,
+  sessionOutput,
+  attachWs,
+  detachWs,
+  probeHealth,
   attachViewer,
   detachViewer,
   finalizeRecorder,

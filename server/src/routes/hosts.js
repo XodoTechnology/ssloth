@@ -39,6 +39,9 @@ function cleanHostInput(body, { partial = false } = {}) {
   if (!partial || body.pinned !== undefined) {
     out.pinned = body.pinned ? 1 : 0;
   }
+  if (!partial || body.shared !== undefined) {
+    out.shared = body.shared ? 1 : 0;
+  }
   if (!partial || body.region !== undefined) out.region = str(body.region, 128);
   if (!partial || body.tags !== undefined) {
     // normalize: "#Routers, core" -> "routers core" (space-separated, deduped)
@@ -62,16 +65,23 @@ function cleanHostInput(body, { partial = false } = {}) {
   return out;
 }
 
-function hostView(row) {
+function hostView(row, userId) {
   const { password_enc, ...rest } = row;
-  return { ...rest, has_password: !!password_enc };
+  return { ...rest, has_password: !!password_enc, owned: row.user_id === userId };
 }
 
 router.get('/', (req, res) => {
+  // Own hosts plus shared ones from other users (annotated with the owner's
+  // name; `owned` tells the UI what's editable).
   const rows = db
-    .prepare('SELECT * FROM hosts WHERE user_id = ? ORDER BY folder, name COLLATE NOCASE')
+    .prepare(
+      `SELECT h.*, u.username AS owner_name FROM hosts h
+       LEFT JOIN users u ON u.id = h.user_id
+       WHERE h.user_id = ? OR h.shared = 1
+       ORDER BY h.folder, h.name COLLATE NOCASE`
+    )
     .all(req.user.id);
-  res.json({ hosts: rows.map(hostView) });
+  res.json({ hosts: rows.map((r) => hostView(r, req.user.id)) });
 });
 
 router.post('/', (req, res) => {
@@ -95,7 +105,7 @@ router.post('/', (req, res) => {
   }
   if (data.jump_host_id != null) {
     const jump = db
-      .prepare('SELECT id FROM hosts WHERE id = ? AND user_id = ?')
+      .prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)')
       .get(data.jump_host_id, req.user.id);
     if (!jump) return res.status(400).json({ error: 'bastion host not found' });
     if (data.jump_host_id === -1) return res.status(400).json({ error: 'invalid bastion' });
@@ -129,7 +139,7 @@ router.put('/:id', (req, res) => {
       return res.status(400).json({ error: 'a host cannot be its own bastion' });
     }
     const jump = db
-      .prepare('SELECT id FROM hosts WHERE id = ? AND user_id = ?')
+      .prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)')
       .get(data.jump_host_id, req.user.id);
     if (!jump) return res.status(400).json({ error: 'bastion host not found' });
   }
@@ -173,7 +183,7 @@ router.get('/status', async (req, res) => {
   if (cached && Date.now() - cached.at < 20000) return res.json({ status: cached.result });
 
   const hosts = db
-    .prepare('SELECT id, hostname, port FROM hosts WHERE user_id = ?')
+    .prepare('SELECT id, hostname, port FROM hosts WHERE user_id = ? OR shared = 1')
     .all(req.user.id);
   const entries = await Promise.all(
     hosts.map((h) => probePort(h.hostname, h.port).then((s) => [h.id, s]))

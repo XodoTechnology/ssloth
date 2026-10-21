@@ -24,6 +24,7 @@ export default function HostForm({ host, onClose, onSaved }) {
     credential_id: host?.credential_id || '',
     jump_host_id: host?.jump_host_id || '',
     record: !!host?.record,
+    shared: !!host?.shared,
     password: '',
     folder: host?.folder || '',
     region: host?.region || '',
@@ -51,6 +52,7 @@ export default function HostForm({ host, onClose, onSaved }) {
         credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
         jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
         record: !!form.record,
+        shared: !!form.shared,
         folder: form.folder,
         region: form.region,
         tags: form.tags,
@@ -182,7 +184,7 @@ export default function HostForm({ host, onClose, onSaved }) {
               ))}
           </select>
         </div>
-        <div className="flex items-end pb-1">
+        <div className="flex items-end pb-1 gap-5">
           <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
             <input
               type="checkbox"
@@ -190,7 +192,19 @@ export default function HostForm({ host, onClose, onSaved }) {
               checked={form.record}
               onChange={(e) => setForm((f) => ({ ...f, record: e.target.checked }))}
             />
-            auto-record sessions to this host
+            auto-record sessions
+          </label>
+          <label
+            className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer"
+            title="Other users on this ssloth instance can see and connect to this host — they can use its saved credential but never read it"
+          >
+            <input
+              type="checkbox"
+              className="accent-emerald-600"
+              checked={form.shared}
+              onChange={(e) => setForm((f) => ({ ...f, shared: e.target.checked }))}
+            />
+            shared with team
           </label>
         </div>
 
