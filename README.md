@@ -75,6 +75,19 @@ docker compose up -d --build
 Open `http://localhost:8080`, create the first admin account, add a host, and
 connect.
 
+### Disposable test sshd
+
+A throwaway sshd ships under the `test` compose profile for exercising
+terminals, SFTP, tunnels, and ProxyJump without touching a real box:
+
+```bash
+docker compose --profile test up -d
+# add a host: tester@<server-ip>:2222, password testpass123
+```
+
+TCP forwarding is enabled so tunnels and bastion jumps work. It's a test
+fixture, not production material — omit the profile on real deployments.
+
 ## Development
 
 ```bash

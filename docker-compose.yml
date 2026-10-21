@@ -15,5 +15,27 @@ services:
       - ssloth-data:/data
     restart: unless-stopped
 
+  # Opt-in test target: `docker compose --profile test up -d`
+  # Disposable sshd on :2222 — tester/testpass123, key auth ready, TCP
+  # forwarding on so tunnels and bastion jumps work. Do NOT deploy alongside
+  # a real instance.
+  test-sshd:
+    image: lscr.io/linuxserver/openssh-server:latest
+    profiles: ["test"]
+    ports:
+      - "2222:2222"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      USER_NAME: tester
+      USER_PASSWORD: testpass123
+      PASSWORD_ACCESS: "true"
+      SUDO_ACCESS: "false"
+    volumes:
+      - sshd-test-config:/config
+      - ./test-sshd-init:/custom-cont-init.d:ro
+    restart: unless-stopped
+
 volumes:
   ssloth-data:
+  sshd-test-config:
