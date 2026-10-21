@@ -149,6 +149,7 @@ ensureColumn('hosts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');
 ensureColumn('hosts', 'region', "region TEXT NOT NULL DEFAULT ''");
 ensureColumn('hosts', 'tags', "tags TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', 'pin_hash', 'pin_hash TEXT');
 
 function audit(user, action, detail, req) {
   try {

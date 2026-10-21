@@ -3,12 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "description": "ssloth desktop wrapper — runs the portal as a local app",
+  "author": "ssloth <dev@ssloth.local>",
+  "homepage": "https://github.com/your-org/ssloth",
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
     "prepare": "node prepare-standalone.js",
     "dist": "node prepare-standalone.js && electron-builder --win",
-    "dist:linux": "node prepare-standalone.js --platform linux && electron-builder --linux"
+    "dist:linux": "node prepare-standalone.js --platform linux && electron-builder --linux",
+    "dist:mac": "node prepare-standalone.js --platform darwin && electron-builder --mac"
   },
   "devDependencies": {
     "electron": "^33.4.11",
@@ -40,6 +43,21 @@
     ],
     "win": {
       "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Network"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true
     },
     "nsis": {
       "oneClick": false,

@@ -41,6 +41,9 @@ module.exports = {
   BIND: process.env.BIND || '0.0.0.0',
   // Set to 'true' when terminating TLS in front (nginx/caddy). Marks cookies Secure.
   SECURE_COOKIES: process.env.SSLOTH_SECURE_COOKIES === 'true',
+  // Desktop build: loopback-only single-user mode — skips the login wall
+  // unless a quick-unlock PIN has been set.
+  DESKTOP: process.env.SSLOTH_DESKTOP === '1',
   SESSION_TTL_MS: 7 * 24 * 60 * 60 * 1000, // 7 days, sliding
   WEB_DIST: process.env.SSLOTH_WEB_DIST || path.join(__dirname, '..', '..', 'web', 'dist'),
 };

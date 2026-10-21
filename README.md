@@ -96,24 +96,32 @@ fixture, not production material — omit the profile on real deployments.
 
 ## Desktop app (Electron)
 
-`desktop/` wraps the same server + web build in Electron — the server runs
-inside Electron's Node runtime (`ELECTRON_RUN_AS_NODE`), binds only
-`127.0.0.1` on a random port, and stores the vault under
-`%APPDATA%\ssloth`. Loopback counts as a secure context, so clipboard
-features work without HTTPS.
+`desktop/` wraps the same server + web build in Electron. Packaged builds
+ship a real Node binary plus the server and `web/dist` as raw resources, so
+`better-sqlite3` uses its standard Node prebuilds — no Electron ABI rebuild
+needed. The server binds only `127.0.0.1` on a random port and stores the
+vault under the OS data dir (`%APPDATA%\ssloth`, `~/.config/ssloth`,
+`~/Library/Application Support/ssloth`). Loopback counts as a secure
+context, so clipboard features work without HTTPS.
 
 ```bash
 cd desktop
 npm install
-npm run dev     # launch against the repo's server + web/dist
-npm run dist    # rebuild native module + build a Windows installer
+npm run dev         # launch against the repo's server + web/dist
+npm run dist        # Windows: NSIS installer
+npm run dist:linux  # Linux: AppImage + .deb
+npm run dist:mac    # macOS: dmg + zip (build on a Mac or CI)
 ```
 
-`npm run dist` rebuilds `better-sqlite3` for Electron's ABI — it downloads a
-prebuild when one exists, otherwise Visual Studio Build Tools are required.
-Note: it mutates `server/node_modules` while packaging, so re-run
-`npm --prefix server rebuild better-sqlite3` before starting a plain Node
-server again.
+`prepare-standalone.js` stages the server with production deps, fetches the
+target platform's `better-sqlite3` prebuild (falls back to a source build
+when none is published), bundles the matching Node runtime, and copies
+`web/dist`. `electron-builder` then packages per-platform installers.
+
+macOS builds need a Mac — or CI. `.github/workflows/desktop-release.yml`
+builds Windows/Linux/macOS-Intel/macOS-ARM artifacts on a `v*` tag push.
+Unsigned mac builds trip Gatekeeper once (right-click → Open); proper
+signing/notarization requires an Apple Developer account.
 
 ## Development
 

@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const { db, audit } = require('./db');
 const { sha256, randomToken } = require('./crypto');
-const { SESSION_TTL_MS, SECURE_COOKIES } = require('./config');
+const { SESSION_TTL_MS, SECURE_COOKIES, DESKTOP } = require('./config');
 
 const COOKIE_NAME = 'ssloth_session';
 
@@ -60,8 +60,19 @@ function resolveToken(token) {
   return { id: row.id, username: row.username, is_admin: !!row.is_admin, totp_enabled: !!row.totp_enabled };
 }
 
+// Desktop mode: single-user loopback app — auto-resolve the account when no
+// unlock PIN is configured. With a PIN, returns null so the unlock screen shows.
+function desktopUser() {
+  if (!DESKTOP) return null;
+  const users = db.prepare('SELECT id, username, is_admin, totp_enabled, pin_hash FROM users ORDER BY id').all();
+  if (users.length !== 1) return null;
+  if (users[0].pin_hash) return null;
+  const u = users[0];
+  return { id: u.id, username: u.username, is_admin: !!u.is_admin, totp_enabled: !!u.totp_enabled };
+}
+
 function resolveCookie(req) {
-  return resolveToken(req.cookies?.[COOKIE_NAME]);
+  return resolveToken(req.cookies?.[COOKIE_NAME]) || desktopUser();
 }
 
 function requireAuth(req, res, next) {
@@ -120,6 +131,7 @@ module.exports = {
   destroySession,
   resolveToken,
   resolveCookie,
+  desktopUser,
   requireAuth,
   requireAdmin,
   checkOrigin,

@@ -76,14 +76,21 @@ async function main() {
   const tgz = path.join(STAGE, `bs3-${PLATFORM}-${ARCH}.tar.gz`);
   const url = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${bsVer}/better-sqlite3-v${bsVer}-node-v${abi}-${PLATFORM}-${ARCH}.tar.gz`;
   console.log('fetching', url);
-  await dl(url, tgz);
-  fs.rmSync(path.join(bsDir, 'build'), { recursive: true, force: true });
-  r = run('tar', ['-xzf', tgz, '-C', bsDir]);
-  if (r.status !== 0) {
-    console.error('better-sqlite3 prebuild extraction failed — no published binary for this target.');
-    process.exit(1);
+  let ok = false;
+  try {
+    await dl(url, tgz);
+    fs.rmSync(path.join(bsDir, 'build'), { recursive: true, force: true });
+    ok = run('tar', ['-xzf', tgz, '-C', bsDir]).status === 0;
+    fs.rmSync(tgz, { force: true });
+  } catch {}
+  if (!ok) {
+    // no published prebuild for this target (e.g. darwin-arm64) — compile it
+    console.warn('no better-sqlite3 prebuild — building from source (needs toolchain)');
+    r = run('npm', ['rebuild', 'better-sqlite3', '--build-from-source'], {
+      cwd: path.join(STAGE, 'server'),
+    });
+    if (r.status !== 0) process.exit(r.status);
   }
-  fs.unlinkSync(tgz);
 
   // 4. web build
   if (!fs.existsSync(path.join(ROOT, 'web', 'dist', 'index.html'))) {
@@ -100,7 +107,12 @@ async function main() {
   if (PLATFORM === 'win32') {
     const zip = path.join(STAGE, 'node.zip');
     await dl(`https://nodejs.org/dist/${tag}/${name}.zip`, zip);
-    run('unzip', ['-o', '-j', zip, `${name}/node.exe`, '-d', nodeDir]);
+    // Windows runners guarantee bsdtar (system32\tar.exe); unix hosts have unzip
+    if (process.platform === 'win32') {
+      run('tar', ['-xf', zip, '-C', nodeDir, '--strip-components=1', `${name}/node.exe`]);
+    } else {
+      run('unzip', ['-o', '-j', zip, `${name}/node.exe`, '-d', nodeDir]);
+    }
     fs.unlinkSync(zip);
   } else {
     const tgzN = path.join(STAGE, 'node.tar.gz');
