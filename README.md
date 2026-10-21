@@ -110,7 +110,7 @@ npm install
 npm run dev         # launch against the repo's server + web/dist
 npm run dist        # Windows: NSIS installer
 npm run dist:linux  # Linux: AppImage + .deb
-npm run dist:mac    # macOS: dmg + zip (build on a Mac or CI)
+npm run dist:mac    # macOS: dmg + zip (dmg needs a Mac or CI)
 ```
 
 `prepare-standalone.js` stages the server with production deps, fetches the
@@ -118,10 +118,13 @@ target platform's `better-sqlite3` prebuild (falls back to a source build
 when none is published), bundles the matching Node runtime, and copies
 `web/dist`. `electron-builder` then packages per-platform installers.
 
-macOS builds need a Mac — or CI. `.github/workflows/desktop-release.yml`
-builds Windows/Linux/macOS-Intel/macOS-ARM artifacts on a `v*` tag push.
-Unsigned mac builds trip Gatekeeper once (right-click → Open); proper
-signing/notarization requires an Apple Developer account.
+Unsigned macOS **zip** builds (Intel + Apple Silicon) can be produced on
+Linux — `npx electron-builder --mac zip [--arm64]` — but `.dmg` and code
+signing require `hdiutil`/Apple tooling, i.e. a real Mac or CI.
+`.github/workflows/desktop-release.yml` builds Windows/Linux/macOS-Intel/
+macOS-ARM artifacts on a `v*` tag push. Unsigned mac builds trip Gatekeeper
+once: right-click → Open, or `xattr -d com.apple.quarantine ssloth.app`.
+Proper signing/notarization requires an Apple Developer account.
 
 ## Development
 
