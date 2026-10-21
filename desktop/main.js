@@ -56,6 +56,8 @@ function startServer() {
         SSLOTH_DATA_DIR: app.getPath('userData'),
         BIND: '127.0.0.1',
         PORT: '0',
+        // single-user loopback app: auto-unlocks unless a PIN is set
+        SSLOTH_DESKTOP: '1',
         // not TLS-terminating here; loopback is already a secure context
         SSLOTH_SECURE_COOKIES: 'false',
       },

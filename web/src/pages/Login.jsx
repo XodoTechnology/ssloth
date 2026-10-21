@@ -1,16 +1,96 @@
 import React, { useState } from 'react';
-import { Terminal, ShieldCheck } from 'lucide-react';
+import { Terminal, ShieldCheck, Delete } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
+
+function PinPad({ onUnlock }) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { setUser } = useStore();
+
+  const unlock = async (value) => {
+    if (busy || value.length < 4) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api('/api/auth/pin', { method: 'POST', body: { pin: value } });
+      setUser(r.user);
+      onUnlock?.();
+    } catch (e) {
+      setError(e.message);
+      setPin('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const tap = (d) => {
+    const next = (pin + d).slice(0, 8);
+    setPin(next);
+    if (next.length >= 4) unlock(next);
+  };
+
+  return (
+    <div className="card p-6 shadow-xl space-y-4">
+      <h1 className="text-center text-sm font-medium text-zinc-300">enter PIN to unlock</h1>
+      <div className="flex justify-center gap-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <span
+            key={i}
+            className={`h-2.5 w-2.5 rounded-full transition-colors ${
+              i < pin.length ? 'bg-emerald-400' : i < 4 ? 'bg-ink-700' : 'bg-ink-800/50'
+            }`}
+          />
+        ))}
+      </div>
+      {error && (
+        <div className="rounded-md border border-red-800 bg-red-950/60 px-3 py-2 text-xs text-red-300 text-center">
+          {error}
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2 max-w-[220px] mx-auto">
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => tap(d)}
+            className="h-12 rounded-md bg-ink-800 text-zinc-200 text-lg font-medium hover:bg-ink-700 active:bg-ink-600 transition-colors"
+          >
+            {d}
+          </button>
+        ))}
+        <span />
+        <button
+          type="button"
+          onClick={() => tap(0)}
+          className="h-12 rounded-md bg-ink-800 text-zinc-200 text-lg font-medium hover:bg-ink-700 active:bg-ink-600 transition-colors"
+        >
+          0
+        </button>
+        <button
+          type="button"
+          onClick={() => setPin((p) => p.slice(0, -1))}
+          className="h-12 rounded-md bg-ink-800 text-zinc-400 hover:bg-ink-700 flex items-center justify-center"
+        >
+          <Delete size={18} />
+        </button>
+      </div>
+      <p className="text-center text-[11px] text-zinc-600">auto-unlocks at 4+ digits</p>
+    </div>
+  );
+}
 
 export default function Login({ setupMode }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [totp, setTotp] = useState('');
   const [needTotp, setNeedTotp] = useState(false);
+  const [usePassword, setUsePassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const { setUser, toast } = useStore();
+  const pinMode = useStore((s) => s.desktop && s.pinSet && !setupMode);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -41,6 +121,9 @@ export default function Login({ setupMode }) {
           <span className="text-3xl font-bold tracking-tight text-zinc-100">ssloth</span>
         </div>
 
+        {pinMode && !usePassword ? (
+          <PinPad onUnlock={() => {}} />
+        ) : (
         <form onSubmit={submit} className="card p-6 space-y-4 shadow-xl">
           <h1 className="text-center text-sm font-medium text-zinc-300">
             {setupMode ? 'create the first admin account' : 'sign in'}
@@ -90,6 +173,15 @@ export default function Login({ setupMode }) {
             <ShieldCheck size={12} /> credentials stay encrypted on this server
           </div>
         </form>
+        )}
+        {pinMode && (
+          <button
+            className="mt-4 w-full text-center text-xs text-zinc-500 hover:text-zinc-300"
+            onClick={() => setUsePassword((v) => !v)}
+          >
+            {usePassword ? 'use PIN instead' : 'use password instead'}
+          </button>
+        )}
       </div>
     </div>
   );

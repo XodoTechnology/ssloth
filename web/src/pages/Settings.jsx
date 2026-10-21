@@ -10,6 +10,7 @@ import {
   Upload,
   Palette,
   Keyboard,
+  Lock,
 } from 'lucide-react';
 import { useRef } from 'react';
 import { api } from '../api';
@@ -19,6 +20,8 @@ import Modal from '../components/Modal';
 
 export default function Settings() {
   const { user, setUser, toast } = useStore();
+  const desktop = useStore((s) => s.desktop);
+  const pinSet = useStore((s) => s.pinSet);
   const [hostkeys, setHostkeys] = useState([]);
   const [users, setUsers] = useState([]);
   const [totpSetup, setTotpSetup] = useState(null); // {qr, secret}
@@ -30,6 +33,7 @@ export default function Settings() {
   const [impPass, setImpPass] = useState('');
   const [fontSize, setFontSize] = useState(localStorage.getItem('ssloth.termFontSize') || '13');
   const [termTheme, setTermTheme] = useState(localStorage.getItem('ssloth.termTheme') || 'dark');
+  const [pinForm, setPinForm] = useState({ pin: '', password: '' });
   const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
@@ -242,6 +246,67 @@ export default function Settings() {
             </div>
           )}
         </section>
+
+        {/* desktop quick PIN */}
+        {desktop && (
+          <section className="card p-4">
+            <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
+              <Lock size={15} className="text-emerald-400" /> Quick unlock PIN
+            </h2>
+            <p className="text-[11px] text-zinc-500 mb-3">
+              {pinSet
+                ? 'PIN required on app launch. Without it the app opens straight in.'
+                : 'No PIN — the app opens straight into your sessions. Set one to lock it on launch.'}
+            </p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  await api(pinSet ? '/api/auth/pin/disable' : '/api/auth/pin/setup', {
+                    method: 'POST',
+                    body: pinForm,
+                  });
+                  useStore.setState({ pinSet: !pinSet });
+                  setPinForm({ pin: '', password: '' });
+                  toast(pinSet ? 'PIN removed' : 'PIN set — required on next launch', 'success');
+                } catch (e2) {
+                  toast(e2.message, 'error');
+                }
+              }}
+              className="flex flex-wrap items-end gap-3"
+            >
+              {!pinSet && (
+                <div>
+                  <label className="label">New PIN (4-8 digits)</label>
+                  <input
+                    className="input !w-36 font-mono tracking-widest"
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={8}
+                    value={pinForm.pin}
+                    onChange={(e) => setPinForm((f) => ({ ...f, pin: e.target.value.replace(/\D/g, '') }))}
+                  />
+                </div>
+              )}
+              <div>
+                <label className="label">Confirm with password</label>
+                <input
+                  className="input !w-48"
+                  type="password"
+                  autoComplete="current-password"
+                  value={pinForm.password}
+                  onChange={(e) => setPinForm((f) => ({ ...f, password: e.target.value }))}
+                />
+              </div>
+              <button
+                className={pinSet ? 'btn-danger !py-1.5 text-xs' : 'btn-primary !py-1.5 text-xs'}
+                disabled={(!pinSet && !/^\d{4,8}$/.test(pinForm.pin)) || !pinForm.password}
+              >
+                {pinSet ? 'Remove PIN' : 'Set PIN'}
+              </button>
+            </form>
+          </section>
+        )}
 
         {/* appearance */}
         <section className="card p-4">

@@ -21,6 +21,7 @@ const {
   resolveCookie,
   requireAuth,
 } = require('../auth');
+const { DESKTOP } = require('../config');
 
 const router = express.Router();
 
@@ -52,6 +53,8 @@ router.get('/state', (req, res) => {
     setup_required: userCount === 0,
     authenticated: !!user,
     user: user ? { id: user.id, username: user.username, is_admin: user.is_admin, totp_enabled: user.totp_enabled } : null,
+    desktop: DESKTOP,
+    pin_set: DESKTOP && !!db.prepare('SELECT COUNT(*) AS c FROM users WHERE pin_hash IS NOT NULL').get().c,
   });
 });
 
@@ -126,6 +129,51 @@ router.post('/password', requireAuth, (req, res) => {
     );
   }
   audit(req.user, 'auth.password_changed', '', req);
+  res.json({ ok: true });
+});
+
+// ---- Desktop quick-unlock PIN ----
+
+const PIN_RE = /^\d{4,8}$/;
+
+// PIN unlock — desktop mode only. Tries each configured PIN hash so a shared
+// desktop DB with multiple accounts still resolves to the right user.
+router.post('/pin', authLimiter, (req, res) => {
+  if (!DESKTOP) return res.status(403).json({ error: 'pin login is desktop only' });
+  const pin = String(req.body?.pin || '');
+  if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'pin must be 4-8 digits' });
+  const rows = db.prepare('SELECT * FROM users WHERE pin_hash IS NOT NULL').all();
+  const user = rows.find((u) => verifyPassword(pin, u.pin_hash));
+  if (!user) {
+    audit(null, 'auth.pin_failed', 'bad pin', req);
+    return res.status(401).json({ error: 'wrong pin' });
+  }
+  createSession(user.id, req, res);
+  audit(user, 'auth.pin_login', 'pin unlock', req);
+  res.json({ user: publicUser(user) });
+});
+
+router.post('/pin/setup', requireAuth, (req, res) => {
+  if (!DESKTOP) return res.status(403).json({ error: 'pin is desktop only' });
+  const pin = String(req.body?.pin || '');
+  if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'pin must be 4-8 digits' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+    return res.status(403).json({ error: 'password incorrect' });
+  }
+  db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPassword(pin), user.id);
+  audit(req.user, 'auth.pin_set', '', req);
+  res.json({ ok: true });
+});
+
+router.post('/pin/disable', requireAuth, (req, res) => {
+  if (!DESKTOP) return res.status(403).json({ error: 'pin is desktop only' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+    return res.status(403).json({ error: 'password incorrect' });
+  }
+  db.prepare('UPDATE users SET pin_hash = NULL WHERE id = ?').run(req.user.id);
+  audit(req.user, 'auth.pin_disabled', '', req);
   res.json({ ok: true });
 });
 

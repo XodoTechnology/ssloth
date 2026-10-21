@@ -21,7 +21,12 @@ export default function App() {
   useEffect(() => {
     api('/api/auth/state')
       .then((s) => {
-        useStore.setState({ setupRequired: s.setup_required, booted: true });
+        useStore.setState({
+          setupRequired: s.setup_required,
+          desktop: !!s.desktop,
+          pinSet: !!s.pin_set,
+          booted: true,
+        });
         setUser(s.authenticated ? s.user : null);
       })
       .catch((e) => setError(e.message));

@@ -7,6 +7,8 @@ export const useStore = create((set, get) => ({
   user: null,
   setupRequired: false,
   booted: false,
+  desktop: false,
+  pinSet: false,
 
   // data
   hosts: [],

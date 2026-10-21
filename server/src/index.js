@@ -14,6 +14,7 @@ const { PORT, BIND, WEB_DIST, SECURE_COOKIES } = require('./config');
 const {
   COOKIE_NAME,
   resolveToken,
+  desktopUser,
   requireAuth,
   checkOrigin,
   checkWsOrigin,
@@ -152,7 +153,7 @@ server.on('upgrade', (req, socket, head) => {
   try {
     cookies = cookie.parse(req.headers.cookie || '');
   } catch {}
-  const user = resolveToken(cookies[COOKIE_NAME]);
+  const user = resolveToken(cookies[COOKIE_NAME]) || desktopUser();
   if (!user) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
