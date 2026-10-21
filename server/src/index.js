@@ -18,6 +18,7 @@ const {
   checkWsOrigin,
 } = require('./auth');
 const { handleTerminalWs } = require('./ws/terminal');
+const { handleShareWs } = require('./ws/share');
 
 const authRoutes = require('./routes/auth');
 const hostRoutes = require('./routes/hosts');
@@ -26,6 +27,7 @@ const snippetRoutes = require('./routes/snippets');
 const tunnelRoutes = require('./routes/tunnels');
 const sftpRoutes = require('./routes/sftp');
 const adminRoutes = require('./routes/admin');
+const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./routes/shares');
 
 const app = express();
 app.disable('x-powered-by');
@@ -64,7 +66,10 @@ app.use('/api/hosts', requireAuth, hostRoutes);
 app.use('/api/credentials', requireAuth, credentialRoutes);
 app.use('/api/snippets', requireAuth, snippetRoutes);
 app.use('/api/tunnels', requireAuth, tunnelRoutes);
+app.use('/api/shares', requireAuth, shareRoutes);
 app.use('/api/admin', requireAuth, adminRoutes);
+// Public read-only metadata for share links (token in path is the credential).
+app.use('/api/public/share', sharePublicRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 
@@ -106,13 +111,21 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname !== '/ws/terminal') {
+  const shareMatch = url.pathname.match(/^\/ws\/share\/([A-Za-z0-9_-]{20,128})$/);
+  if (url.pathname !== '/ws/terminal' && !shareMatch) {
     socket.destroy();
     return;
   }
   if (!checkWsOrigin(req)) {
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
+    return;
+  }
+  if (shareMatch) {
+    // Public share viewer - the URL token is the credential, no session cookie.
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      handleShareWs(ws, req, shareMatch[1]);
+    });
     return;
   }
   let cookies = {};

@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS tunnels (
 );
 CREATE INDEX IF NOT EXISTS idx_tunnels_user ON tunnels(user_id);
 
+CREATE TABLE IF NOT EXISTS shares (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  label      TEXT NOT NULL DEFAULT '',
+  mode       TEXT NOT NULL DEFAULT 'view' CHECK (mode IN ('view','control')),
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_shares_session ON shares(session_id);
+
 CREATE TABLE IF NOT EXISTS audit (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER,

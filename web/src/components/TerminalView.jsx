@@ -12,12 +12,140 @@ import {
   ShieldAlert,
   KeyRound,
   Search,
+  Share2,
+  Copy,
+  Trash2,
 } from 'lucide-react';
+import { api } from '../api';
 import { useStore } from '../store';
 import Modal from './Modal';
 import SftpPanel from './SftpPanel';
 
 const encoder = new TextEncoder();
+
+function ShareModal({ sessionId, label, onClose }) {
+  const [mode, setMode] = useState('view');
+  const [ttl, setTtl] = useState(60);
+  const [shares, setShares] = useState([]);
+  const [freshUrl, setFreshUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { toast } = useStore();
+
+  const load = () =>
+    api('/api/shares')
+      .then((r) => setShares(r.shares.filter((s) => s.session_id === sessionId && s.expires_at > Date.now())))
+      .catch((e) => toast(e.message, 'error'));
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const create = async () => {
+    setBusy(true);
+    try {
+      const r = await api('/api/shares', {
+        method: 'POST',
+        body: { session_id: sessionId, mode, ttl_minutes: ttl },
+      });
+      const full = `${location.origin}${r.share.url}`;
+      setFreshUrl(full);
+      try {
+        await navigator.clipboard.writeText(full);
+        toast('share link copied to clipboard', 'success');
+      } catch {
+        toast('link created', 'success');
+      }
+      await load();
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (id) => {
+    await api(`/api/shares/${id}`, { method: 'DELETE' });
+    load();
+  };
+
+  return (
+    <Modal title={`Share session — ${label}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-zinc-400">
+          Generates a one-off link anyone can open — no login. <span className="text-emerald-300">View only</span> lets
+          them watch; <span className="text-amber-300">interactive</span> lets them type into your session. Links expire
+          automatically and die when you close the tab.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Access</label>
+            <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+              <option value="view">View only (read)</option>
+              <option value="control">Interactive (can type)</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Expires in</label>
+            <select className="input" value={ttl} onChange={(e) => setTtl(parseInt(e.target.value, 10))}>
+              <option value={15}>15 minutes</option>
+              <option value={60}>1 hour</option>
+              <option value={480}>8 hours</option>
+              <option value={1440}>24 hours</option>
+            </select>
+          </div>
+        </div>
+        <button className="btn-primary w-full justify-center" onClick={create} disabled={busy}>
+          {busy ? '…' : 'Generate ephemeral link'}
+        </button>
+
+        {freshUrl && (
+          <div className="rounded-md border border-emerald-800 bg-emerald-950/40 p-2.5 space-y-1.5">
+            <div className="text-[11px] text-emerald-300 font-medium">link created — shown once, copy it now</div>
+            <div className="flex gap-2">
+              <input className="input font-mono !text-[11px] flex-1" readOnly value={freshUrl} onFocus={(e) => e.target.select()} />
+              <button
+                className="btn-ghost border border-ink-600 !px-2"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(freshUrl);
+                    toast('copied', 'success');
+                  } catch {}
+                }}
+              >
+                <Copy size={13} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {shares.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="label !mb-0">Active links for this session</div>
+            {shares.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1.5">
+                <span
+                  className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded ${
+                    s.mode === 'control' ? 'bg-amber-950 text-amber-300' : 'bg-emerald-950 text-emerald-300'
+                  }`}
+                >
+                  {s.mode === 'control' ? 'interactive' : 'view'}
+                </span>
+                <span className="text-[11px] text-zinc-500">
+                  expires {new Date(s.expires_at).toLocaleTimeString()}
+                </span>
+                <span className="flex-1" />
+                <button className="p-1 text-zinc-500 hover:text-red-400" title="Revoke" onClick={() => revoke(s.id)}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
 
 export default function TerminalView({ tab, active }) {
   const containerRef = useRef(null);
@@ -38,6 +166,7 @@ export default function TerminalView({ tab, active }) {
   const [searchQ, setSearchQ] = useState('');
   const [varPrompt, setVarPrompt] = useState(null); // {snippet, vars:[names]}
   const [varValues, setVarValues] = useState({});
+  const [showShare, setShowShare] = useState(false);
 
   const { snippets, closeTab, setTabStatus, setTabSession, registerTerminal, toast } = useStore();
 
@@ -78,6 +207,25 @@ export default function TerminalView({ tab, active }) {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(d));
     });
 
+    // Highlight-to-copy, like a desktop SSH client.
+    term.onSelectionChange(() => {
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard?.writeText(sel).catch(() => {});
+    });
+
+    // Right-click pastes into the shell (xterm applies bracketed-paste so a
+    // pasted multi-line blob can't auto-execute without your Enter).
+    const onContextMenu = (e) => {
+      e.preventDefault();
+      navigator.clipboard
+        ?.readText()
+        .then((text) => {
+          if (text) term.paste(text);
+        })
+        .catch(() => toast('clipboard read blocked — use Ctrl+V', 'info'));
+    };
+    containerRef.current.addEventListener('contextmenu', onContextMenu);
+
     registerTerminal(tab.id, {
       send: (text) => {
         const ws = wsRef.current;
@@ -100,6 +248,7 @@ export default function TerminalView({ tab, active }) {
 
     return () => {
       ro.disconnect();
+      containerRef.current?.removeEventListener('contextmenu', onContextMenu);
       try { wsRef.current?.close(); } catch {}
       term.dispose();
     };
@@ -288,6 +437,14 @@ export default function TerminalView({ tab, active }) {
         >
           <FolderOpen size={14} /> <span className="hidden sm:inline">Files</span>
         </button>
+        <button
+          className="btn-ghost !py-1 !px-2 text-xs"
+          onClick={() => setShowShare(true)}
+          disabled={status !== 'ready'}
+          title="Share session"
+        >
+          <Share2 size={14} /> <span className="hidden sm:inline">Share</span>
+        </button>
         <button className="btn-ghost !py-1 !px-2 text-xs" onClick={connect} title="Reconnect">
           <RefreshCw size={14} />
         </button>
@@ -401,6 +558,11 @@ export default function TerminalView({ tab, active }) {
             </div>
           </form>
         </Modal>
+      )}
+
+      {/* share link modal */}
+      {showShare && sessionId && (
+        <ShareModal sessionId={sessionId} label={statusMsg || tab.title} onClose={() => setShowShare(false)} />
       )}
 
       {/* snippet variable fill */}

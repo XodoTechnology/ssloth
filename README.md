@@ -8,7 +8,11 @@ port forwards.
 ## Features
 
 - **Web terminal** — full xterm.js terminal over a WebSocket → SSH bridge.
-  Multiple tabs, reconnect, scrollback search, clickable links, paste support.
+  Multiple tabs, reconnect, scrollback search, clickable links,
+  highlight-to-copy and right-click paste (with bracketed-paste safety).
+- **Ephemeral share links** — share a live session to anyone with a one-off
+  link: view-only or interactive, 15 min–24 h TTL, revocable, stored hashed,
+  and dead the moment you close the tab.
 - **Host manager** — saved hosts with folders, colors, notes, and keepalive;
   quick-connect with `user@host[:port]`.
 - **Credential vault** — reusable password credentials and SSH keys
@@ -75,6 +79,7 @@ npm run build              # produce web/dist (served by the server in prod)
 ```text
 browser ──HTTPS──> express (static SPA + JSON API + cookie auth)
 browser ──WSS───> /ws/terminal ──ssh2──> your servers
+viewer  ──WSS───> /ws/share/<token> (ephemeral, no login)
 browser ──HTTPS─> /api/sftp/* ────ssh2 SFTP──> same servers
 ```
 

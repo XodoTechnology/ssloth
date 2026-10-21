@@ -7,6 +7,7 @@ const {
   createSession,
   destroySession,
   trustHostKey,
+  broadcastOutput,
 } = require('../ssh/manager');
 
 const MAX_AUTH_ATTEMPTS = 3;
@@ -174,12 +175,15 @@ function handleTerminalWs(ws, req, user) {
           return destroySession(session.id);
         }
         stream = s;
+        session.stream = s;
         send({ type: 'ready', sessionId: session.id, label: spec.label });
         stream.on('data', (chunk) => {
           if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+          broadcastOutput(session, chunk);
         });
         stream.stderr?.on('data', (chunk) => {
           if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+          broadcastOutput(session, chunk);
         });
         stream.on('close', () => {
           send({ type: 'status', state: 'closed', message: 'session ended' });

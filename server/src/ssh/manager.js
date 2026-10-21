@@ -204,6 +204,9 @@ function createSession(userId, conn, spec) {
     sftp: null,
     sftpPromise: null,
     ws: null,
+    stream: null,
+    viewers: new Map(), // ws -> { mode }
+    replay: Buffer.alloc(0),
     createdAt: Date.now(),
     lastUsed: Date.now(),
   };
@@ -214,9 +217,46 @@ function createSession(userId, conn, spec) {
       sessions.delete(id);
       try { s.ws?.send(JSON.stringify({ type: 'status', state: 'closed', message: 'connection closed' })); } catch {}
       try { s.ws?.close(); } catch {}
+      for (const viewerWs of s.viewers.keys()) {
+        try { viewerWs.send(JSON.stringify({ type: 'status', state: 'closed', message: 'session ended by owner' })); } catch {}
+        try { viewerWs.close(); } catch {}
+      }
+      s.viewers.clear();
+      // Shares bound to a dead session can never resolve again.
+      try { db.prepare('DELETE FROM shares WHERE session_id = ?').run(id); } catch {}
     }
   });
   return session;
+}
+
+const REPLAY_CAP = 256 * 1024;
+
+// Send terminal output to all attached share viewers and keep a capped
+// replay buffer so viewers joining late see recent output.
+function broadcastOutput(session, chunk) {
+  session.replay =
+    session.replay.length + chunk.length > REPLAY_CAP
+      ? Buffer.concat([session.replay.subarray(-REPLAY_CAP / 2), chunk])
+      : Buffer.concat([session.replay, chunk]);
+  for (const ws of session.viewers.keys()) {
+    try {
+      if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
+    } catch {}
+  }
+}
+
+function attachViewer(session, ws, mode) {
+  session.viewers.set(ws, { mode });
+  session.lastUsed = Date.now();
+  if (session.replay.length) {
+    try {
+      ws.send(session.replay, { binary: true });
+    } catch {}
+  }
+}
+
+function detachViewer(session, ws) {
+  session.viewers.delete(ws);
 }
 
 function getSession(userId, sessionId) {
@@ -259,6 +299,9 @@ module.exports = {
   getSession,
   getSftp,
   destroySession,
+  broadcastOutput,
+  attachViewer,
+  detachViewer,
   trustHostKey,
   listHostKeys,
   removeHostKey,

@@ -11,6 +11,7 @@ import Snippets from './pages/Snippets';
 import Tunnels from './pages/Tunnels';
 import Settings from './pages/Settings';
 import Audit from './pages/Audit';
+import SharePage from './pages/SharePage';
 
 export default function App() {
   const { booted, setupRequired, user, setUser } = useStore();
@@ -24,6 +25,15 @@ export default function App() {
       })
       .catch((e) => setError(e.message));
   }, []);
+
+  // Shared-session links are public — render before the auth gate.
+  if (window.location.pathname.startsWith('/share/')) {
+    return (
+      <Routes>
+        <Route path="/share/:token" element={<SharePage />} />
+      </Routes>
+    );
+  }
 
   if (error) {
     return (
