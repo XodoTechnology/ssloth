@@ -1,0 +1,47 @@
+{
+  "name": "ssloth-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ssloth desktop wrapper — runs the portal as a local app",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "rebuild-native": "node rebuild-native.js",
+    "dist": "npm run rebuild-native && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.ssloth.app",
+    "productName": "ssloth",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": ["**/*", "!data/**"]
+      },
+      {
+        "from": "../web/dist",
+        "to": "web/dist",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "ssloth"
+    }
+  }
+}
