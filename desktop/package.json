@@ -6,8 +6,9 @@
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
-    "rebuild-native": "node rebuild-native.js",
-    "dist": "npm run rebuild-native && electron-builder"
+    "prepare": "node prepare-standalone.js",
+    "dist": "node prepare-standalone.js && electron-builder --win",
+    "dist:linux": "node prepare-standalone.js --platform linux && electron-builder --linux"
   },
   "devDependencies": {
     "electron": "^33.4.11",
@@ -25,14 +26,16 @@
     ],
     "extraResources": [
       {
-        "from": "../server",
-        "to": "server",
-        "filter": ["**/*", "!data/**"]
+        "from": "stage/server",
+        "to": "server"
       },
       {
-        "from": "../web/dist",
-        "to": "web/dist",
-        "filter": ["**/*"]
+        "from": "stage/web/dist",
+        "to": "web/dist"
+      },
+      {
+        "from": "stage/node",
+        "to": "node"
       }
     ],
     "win": {

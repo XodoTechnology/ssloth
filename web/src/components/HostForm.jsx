@@ -26,6 +26,8 @@ export default function HostForm({ host, onClose, onSaved }) {
     record: !!host?.record,
     password: '',
     folder: host?.folder || '',
+    region: host?.region || '',
+    tags: host?.tags || '',
     color: host?.color || '',
     notes: host?.notes || '',
     keepalive: host?.keepalive ?? 15,
@@ -50,6 +52,8 @@ export default function HostForm({ host, onClose, onSaved }) {
         jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
         record: !!form.record,
         folder: form.folder,
+        region: form.region,
+        tags: form.tags,
         color: form.color,
         notes: form.notes,
         keepalive: parseInt(form.keepalive, 10) || 0,
@@ -131,6 +135,19 @@ export default function HostForm({ host, onClose, onSaved }) {
         <div>
           <label className="label">Folder / group</label>
           <input className="input" value={form.folder} onChange={set('folder')} placeholder="production" />
+        </div>
+        <div>
+          <label className="label">Region</label>
+          <input className="input" value={form.region} onChange={set('region')} placeholder="us-east-1" />
+        </div>
+        <div className="col-span-2">
+          <label className="label">Tags — filter with #tag, open all at once</label>
+          <input
+            className="input font-mono"
+            value={form.tags}
+            onChange={set('tags')}
+            placeholder="routers core eu-west"
+          />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>

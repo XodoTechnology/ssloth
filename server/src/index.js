@@ -151,5 +151,6 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, BIND, () => {
-  console.log(`[ssloth] listening on http://${BIND}:${PORT}`);
+  const addr = server.address();
+  console.log(`[ssloth] listening on http://${addr.address}:${addr.port}`);
 });

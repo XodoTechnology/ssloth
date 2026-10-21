@@ -46,6 +46,12 @@ port forwards.
   toasts you (`sleep 5 && printf '\a'` — job-done pings).
 - **Pinned & recent hosts** — star favorites to the top; last-used group
   updates on every connect.
+- **Tags, groups & regions** — folder groups, region badges, and `#tag`
+  hashtags on hosts; filter with `#routers` and open every matching
+  session at once (or hit the play button on any group header).
+- **Desktop app** — `desktop/` wraps the whole thing in Electron: bundled
+  Node runtime, loopback-only server, vault in `%APPDATA%`. Clipboard
+  features work without HTTPS.
 - **Latency meter** — live connection RTT in the status bar.
 - **Appearance presets** — font size + terminal themes in Settings.
 - **Keyboard shortcuts** — Ctrl+K palette, Ctrl+Shift+`[`/`]` cycle tabs,
@@ -87,6 +93,27 @@ docker compose --profile test up -d
 
 TCP forwarding is enabled so tunnels and bastion jumps work. It's a test
 fixture, not production material — omit the profile on real deployments.
+
+## Desktop app (Electron)
+
+`desktop/` wraps the same server + web build in Electron — the server runs
+inside Electron's Node runtime (`ELECTRON_RUN_AS_NODE`), binds only
+`127.0.0.1` on a random port, and stores the vault under
+`%APPDATA%\ssloth`. Loopback counts as a secure context, so clipboard
+features work without HTTPS.
+
+```bash
+cd desktop
+npm install
+npm run dev     # launch against the repo's server + web/dist
+npm run dist    # rebuild native module + build a Windows installer
+```
+
+`npm run dist` rebuilds `better-sqlite3` for Electron's ABI — it downloads a
+prebuild when one exists, otherwise Visual Studio Build Tools are required.
+Note: it mutates `server/node_modules` while packaging, so re-run
+`npm --prefix server rebuild better-sqlite3` before starting a plain Node
+server again.
 
 ## Development
 

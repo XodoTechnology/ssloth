@@ -147,6 +147,8 @@ ensureColumn('hosts', 'jump_host_id', 'jump_host_id INTEGER REFERENCES hosts(id)
 ensureColumn('hosts', 'record', 'record INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');
+ensureColumn('hosts', 'region', "region TEXT NOT NULL DEFAULT ''");
+ensureColumn('hosts', 'tags', "tags TEXT NOT NULL DEFAULT ''");
 
 function audit(user, action, detail, req) {
   try {

@@ -1,46 +1,58 @@
 'use strict';
 
-// ssloth desktop — spawns the bundled Express/WS server inside Electron's
-// Node runtime and loads it in a BrowserWindow. Data lives in
-// %APPDATA%/ssloth (or the platform equivalent); the server only binds
-// loopback, so nothing is exposed to the network.
+// ssloth desktop — spawns the bundled Express/WS server with a real Node
+// binary and loads it in a BrowserWindow. Data lives in %APPDATA%\ssloth
+// (or the platform equivalent); the server only binds loopback, so nothing
+// is exposed to the network.
+//
+// Packaged builds ship resources/node/node(.exe) plus the server and
+// web/dist as raw resources, so native modules (better-sqlite3) keep their
+// standard Node prebuilds — no Electron ABI rebuild needed. In dev (`npm
+// run dev`) it just uses the `node` on PATH.
 
 const { app, BrowserWindow, dialog } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const net = require('net');
 
 let serverProc = null;
 let mainWindow = null;
 let serverUrl = null;
 
 function serverPaths() {
-  // Packaged: resources/server + resources/web/dist (mirrors repo layout so
-  // config.js's relative WEB_DIST resolution keeps working).
-  if (app.isPackaged) {
-    return {
-      entry: path.join(process.resourcesPath, 'server', 'src', 'index.js'),
-      cwd: path.join(process.resourcesPath, 'server'),
-    };
-  }
+  const res = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
   return {
-    entry: path.join(__dirname, '..', 'server', 'src', 'index.js'),
-    cwd: path.join(__dirname, '..', 'server'),
+    entry: path.join(res, 'server', 'src', 'index.js'),
+    cwd: path.join(res, 'server'),
+    node: app.isPackaged
+      ? path.join(res, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+      : null,
   };
 }
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    const { entry, cwd } = serverPaths();
+    const { entry, cwd, node } = serverPaths();
     const logFile = path.join(app.getPath('userData'), 'server.log');
     const log = fs.createWriteStream(logFile, { flags: 'a' });
 
-    serverProc = spawn(process.execPath, [entry], {
+    let bin = node || 'node';
+    const args = [entry];
+    const extraEnv = {};
+    if (!app.isPackaged) {
+      // dev convenience: no node on PATH -> fall back to Electron-as-Node
+      const probe = spawnSync(bin, ['--version'], { encoding: 'utf8' });
+      if (probe.error) {
+        bin = process.execPath;
+        extraEnv.ELECTRON_RUN_AS_NODE = '1';
+      }
+    }
+
+    serverProc = spawn(bin, args, {
       cwd,
       env: {
         ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
+        ...extraEnv,
         SSLOTH_DATA_DIR: app.getPath('userData'),
         BIND: '127.0.0.1',
         PORT: '0',
@@ -49,6 +61,8 @@ function startServer() {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    serverProc.on('error', (e) => reject(new Error(`could not spawn server: ${e.message}`)));
 
     const onData = (buf) => {
       const line = buf.toString();

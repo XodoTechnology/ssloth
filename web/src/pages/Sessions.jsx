@@ -14,6 +14,7 @@ import {
   Star,
   Copy,
   Clock,
+  Play,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -63,13 +64,19 @@ export default function Sessions() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    if (q.startsWith('#')) {
+      const tag = q.slice(1);
+      return hosts.filter((h) => (h.tags || '').split(' ').includes(tag));
+    }
     return hosts.filter(
       (h) =>
         !q ||
         h.name.toLowerCase().includes(q) ||
         h.hostname.toLowerCase().includes(q) ||
         h.username.toLowerCase().includes(q) ||
-        (h.folder || '').toLowerCase().includes(q)
+        (h.folder || '').toLowerCase().includes(q) ||
+        (h.region || '').toLowerCase().includes(q) ||
+        (h.tags || '').includes(q)
     );
   }, [hosts, query]);
 
@@ -96,6 +103,13 @@ export default function Sessions() {
 
   const connectHost = (h) => {
     openTab({ hostId: h.id }, h.name, h.color);
+  };
+
+  const connectAll = (list, label) => {
+    if (!list.length) return;
+    if (list.length > 8 && !confirm(`Open ${list.length} sessions to ${label}?`)) return;
+    for (const h of list) openTab({ hostId: h.id }, h.name, h.color);
+    toast(`opened ${list.length} session${list.length > 1 ? 's' : ''} → ${label}`, 'success');
   };
 
   const quickConnect = (e) => {
@@ -165,11 +179,35 @@ export default function Sessions() {
         }
       />
       <div className="min-w-0 flex-1">
-        <div className="text-sm text-zinc-200 truncate">{h.name}</div>
+        <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
+          {h.name}
+          {h.region && (
+            <span className="shrink-0 rounded bg-ink-800 px-1 py-px text-[9px] font-medium text-sky-400 uppercase">
+              {h.region}
+            </span>
+          )}
+        </div>
         <div className="text-[11px] text-zinc-500 truncate font-mono">
           {h.username}@{h.hostname}
           {h.port !== 22 ? `:${h.port}` : ''}
         </div>
+        {h.tags && (
+          <div className="flex flex-wrap gap-1 mt-0.5">
+            {h.tags.split(' ').map((t) => (
+              <button
+                key={t}
+                className="rounded bg-ink-800 px-1 text-[9px] text-violet-400 hover:bg-violet-950"
+                title={`filter #${t}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQuery(`#${t}`);
+                }}
+              >
+                #{t}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
         <button
@@ -256,6 +294,15 @@ export default function Sessions() {
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-3">
+            {query.trim().startsWith('#') && filtered.length > 0 && (
+              <button
+                className="w-full flex items-center justify-center gap-2 rounded-md border border-violet-800 bg-violet-950/40 px-2 py-1.5 text-xs text-violet-300 hover:bg-violet-950/70"
+                onClick={() => connectAll(filtered, query.trim())}
+              >
+                <Play size={11} />
+                open all {filtered.length} {query.trim()} sessions
+              </button>
+            )}
             {pinned.length > 0 && (
               <div>
                 <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-amber-500">
@@ -275,12 +322,22 @@ export default function Sessions() {
             {groups.map(([folder, list]) => (
               <div key={folder}>
                 <button
-                  className="flex items-center gap-1.5 w-full px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+                  className="group/hdr flex items-center gap-1.5 w-full px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
                   onClick={() => setCollapsed((c) => ({ ...c, [folder]: !c[folder] }))}
                 >
                   <FolderClosed size={12} />
                   <span className="truncate">{folder}</span>
-                  <span className="ml-auto text-zinc-600">{list.length}</span>
+                  <span
+                    className="ml-auto opacity-0 group-hover/hdr:opacity-100 text-zinc-500 hover:text-emerald-400"
+                    title={`Connect to all ${list.length} hosts in ${folder}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      connectAll(list, folder);
+                    }}
+                  >
+                    <Play size={11} />
+                  </span>
+                  <span className="text-zinc-600">{list.length}</span>
                 </button>
                 {!collapsed[folder] && list.map(renderHost)}
               </div>

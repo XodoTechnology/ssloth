@@ -55,6 +55,10 @@ router.post('/export', (req, res) => {
       username: h.username,
       auth_type: h.auth_type,
       folder: h.folder,
+      region: h.region,
+      tags: h.tags,
+      pinned: h.pinned,
+      record: h.record,
       color: h.color,
       notes: h.notes,
       keepalive: h.keepalive,
@@ -180,8 +184,8 @@ router.post('/import', (req, res) => {
       const info = db
         .prepare(
           `INSERT INTO hosts (user_id, name, hostname, port, username, auth_type, credential_id,
-            password_enc, folder, color, notes, keepalive, jump_host_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            password_enc, folder, region, tags, pinned, record, color, notes, keepalive, jump_host_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           req.user.id,
@@ -193,6 +197,10 @@ router.post('/import', (req, res) => {
           credential_id,
           h.password_ref && secrets[h.password_ref] ? encryptSecret(secrets[h.password_ref]) : null,
           String(h.folder || '').slice(0, 128),
+          String(h.region || '').slice(0, 128),
+          String(h.tags || '').slice(0, 1024),
+          h.pinned ? 1 : 0,
+          h.record ? 1 : 0,
           String(h.color || '').slice(0, 32),
           String(h.notes || '').slice(0, 4000),
           parseInt(h.keepalive, 10) || 15,
