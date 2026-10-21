@@ -1,0 +1,19 @@
+services:
+  ssloth:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # REQUIRED in production: any long random string encrypts the vault.
+      # Generate with: openssl rand -base64 48
+      SSLOTH_MASTER_KEY: ${SSLOTH_MASTER_KEY:?Set SSLOTH_MASTER_KEY before deploying}
+      # set 'true' when served over HTTPS (reverse proxy) so cookies are Secure
+      SSLOTH_SECURE_COOKIES: ${SSLOTH_SECURE_COOKIES:-false}
+      # set to 'true' or a CIDR when behind a trusted reverse proxy
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+    volumes:
+      - ssloth-data:/data
+    restart: unless-stopped
+
+volumes:
+  ssloth-data:

@@ -1,0 +1,173 @@
+import React, { useState } from 'react';
+import Modal from './Modal';
+import { api } from '../api';
+import { useStore } from '../store';
+
+const COLORS = ['', 'emerald', 'sky', 'amber', 'rose', 'violet'];
+const COLOR_DOT = {
+  '': 'bg-zinc-600',
+  emerald: 'bg-emerald-500',
+  sky: 'bg-sky-500',
+  amber: 'bg-amber-500',
+  rose: 'bg-rose-500',
+  violet: 'bg-violet-500',
+};
+
+export default function HostForm({ host, onClose, onSaved }) {
+  const { credentials, toast } = useStore();
+  const [form, setForm] = useState({
+    name: host?.name || '',
+    hostname: host?.hostname || '',
+    port: host?.port || 22,
+    username: host?.username || '',
+    auth_type: host?.auth_type || 'credential',
+    credential_id: host?.credential_id || '',
+    password: '',
+    folder: host?.folder || '',
+    color: host?.color || '',
+    notes: host?.notes || '',
+    keepalive: host?.keepalive ?? 15,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const body = {
+        name: form.name,
+        hostname: form.hostname,
+        port: parseInt(form.port, 10) || 22,
+        username: form.username,
+        auth_type: form.auth_type,
+        credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
+        folder: form.folder,
+        color: form.color,
+        notes: form.notes,
+        keepalive: parseInt(form.keepalive, 10) || 0,
+      };
+      if (form.auth_type === 'password' && form.password) body.password = form.password;
+      if (host) {
+        await api(`/api/hosts/${host.id}`, { method: 'PUT', body });
+        toast('host updated', 'success');
+      } else {
+        if (form.auth_type === 'password' && !form.password) {
+          throw new Error('password required for password auth (or pick "ask")');
+        }
+        await api('/api/hosts', { method: 'POST', body });
+        toast('host created', 'success');
+      }
+      onSaved();
+    } catch (e2) {
+      setError(e2.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={host ? `Edit ${host.name}` : 'New host'} onClose={onClose} wide>
+      <form onSubmit={save} className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <label className="label">Display name</label>
+          <input className="input" value={form.name} onChange={set('name')} placeholder="prod-web-01" autoFocus />
+        </div>
+        <div>
+          <label className="label">Hostname / IP</label>
+          <input className="input font-mono" value={form.hostname} onChange={set('hostname')} placeholder="10.0.0.5" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Port</label>
+            <input className="input font-mono" type="number" min="1" max="65535" value={form.port} onChange={set('port')} />
+          </div>
+          <div>
+            <label className="label">Username</label>
+            <input className="input font-mono" value={form.username} onChange={set('username')} placeholder="root" />
+          </div>
+        </div>
+
+        <div>
+          <label className="label">Authentication</label>
+          <select className="input" value={form.auth_type} onChange={set('auth_type')}>
+            <option value="credential">Saved credential / key</option>
+            <option value="password">Inline password</option>
+            <option value="ask">Ask at connect (never stored)</option>
+          </select>
+        </div>
+        <div>
+          {form.auth_type === 'credential' && (
+            <>
+              <label className="label">Credential</label>
+              <select className="input" value={form.credential_id} onChange={set('credential_id')}>
+                <option value="">— select —</option>
+                {credentials.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.type})
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          {form.auth_type === 'password' && (
+            <>
+              <label className="label">Password {host && <span className="text-zinc-600">(blank = keep)</span>}</label>
+              <input className="input" type="password" value={form.password} onChange={set('password')} autoComplete="new-password" />
+            </>
+          )}
+          {form.auth_type === 'ask' && (
+            <p className="text-[11px] text-zinc-500 mt-6">password is prompted in the terminal and never stored</p>
+          )}
+        </div>
+
+        <div>
+          <label className="label">Folder / group</label>
+          <input className="input" value={form.folder} onChange={set('folder')} placeholder="production" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Color</label>
+            <div className="flex gap-1.5 mt-1.5">
+              {COLORS.map((c) => (
+                <button
+                  key={c || 'none'}
+                  type="button"
+                  onClick={() => set('color')(c)}
+                  className={`h-5 w-5 rounded-full ${COLOR_DOT[c]} ${form.color === c ? 'ring-2 ring-zinc-300 ring-offset-2 ring-offset-ink-850' : 'opacity-60 hover:opacity-100'}`}
+                />
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="label">Keepalive (s)</label>
+            <input className="input font-mono" type="number" min="0" max="300" value={form.keepalive} onChange={set('keepalive')} />
+          </div>
+        </div>
+
+        <div className="col-span-2">
+          <label className="label">Notes</label>
+          <textarea className="input" rows="2" value={form.notes} onChange={set('notes')} />
+        </div>
+
+        {error && (
+          <div className="col-span-2 rounded-md border border-red-800 bg-red-950/60 px-3 py-2 text-xs text-red-300">
+            {error}
+          </div>
+        )}
+
+        <div className="col-span-2 flex justify-end gap-2 pt-1">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" disabled={busy || !form.name || !form.hostname || !form.username}>
+            {busy ? '…' : host ? 'Save' : 'Create'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
