@@ -4,6 +4,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
+const compression = require('compression');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const { WebSocketServer } = require('ws');
@@ -34,6 +35,18 @@ const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./rout
 const app = express();
 app.disable('x-powered-by');
 if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
+
+// gzip/deflate responses — the SPA bundle is ~600KB raw; over a WAN link
+// this is the difference between a snappy load and a multi-second stall.
+// SFTP file streams already transfer raw bytes, so skip compressing those.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (/\/api\/sftp\/[^/]+\/(download|upload)$/.test(req.path)) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 
 app.use(
   helmet({

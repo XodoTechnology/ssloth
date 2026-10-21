@@ -72,9 +72,14 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
       broadcastText(`${tab.id}:${pane.id}`, d);
     });
 
+    let selTimer = null;
     term.onSelectionChange(() => {
-      const sel = term.getSelection();
-      if (sel) navigator.clipboard?.writeText(sel).catch(() => {});
+      // fires continuously during a drag-select — debounce the clipboard write
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard?.writeText(sel).catch(() => {});
+      }, 120);
     });
 
     term.onBell(() => {
@@ -185,7 +190,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
           break;
         case 'ready':
           sessionRef.current = msg.sessionId;
-          setPaneState({ status: 'ready', sessionId: msg.sessionId, label: msg.label });
+          setPaneState({ status: 'ready', sessionId: msg.sessionId, label: msg.label, statusMsg: '' });
           term?.focus();
           pingTimer = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping', t: Date.now() }));
