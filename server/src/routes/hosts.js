@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const net = require('net');
 const { db } = require('../db');
 const { encryptSecret } = require('../crypto');
 const { auditReq } = require('../auth');
@@ -28,6 +29,12 @@ function cleanHostInput(body, { partial = false } = {}) {
   }
   if (!partial || body.credential_id !== undefined) {
     out.credential_id = body.credential_id == null ? null : parseInt(body.credential_id, 10);
+  }
+  if (!partial || body.jump_host_id !== undefined) {
+    out.jump_host_id = body.jump_host_id == null ? null : parseInt(body.jump_host_id, 10);
+  }
+  if (!partial || body.record !== undefined) {
+    out.record = body.record ? 1 : 0;
   }
   if (!partial || body.folder !== undefined) out.folder = str(body.folder, 128);
   if (!partial || body.color !== undefined) out.color = str(body.color, 32);
@@ -74,6 +81,13 @@ router.post('/', (req, res) => {
       .get(data.credential_id, req.user.id);
     if (!cred) return res.status(400).json({ error: 'credential not found' });
   }
+  if (data.jump_host_id != null) {
+    const jump = db
+      .prepare('SELECT id FROM hosts WHERE id = ? AND user_id = ?')
+      .get(data.jump_host_id, req.user.id);
+    if (!jump) return res.status(400).json({ error: 'bastion host not found' });
+    if (data.jump_host_id === -1) return res.status(400).json({ error: 'invalid bastion' });
+  }
   const cols = Object.keys(data);
   const info = db
     .prepare(`INSERT INTO hosts (user_id, ${cols.join(',')}) VALUES (?, ${cols.map(() => '?').join(',')})`)
@@ -98,6 +112,15 @@ router.put('/:id', (req, res) => {
       .get(data.credential_id, req.user.id);
     if (!cred) return res.status(400).json({ error: 'credential not found' });
   }
+  if (data.jump_host_id != null) {
+    if (data.jump_host_id === existing.id) {
+      return res.status(400).json({ error: 'a host cannot be its own bastion' });
+    }
+    const jump = db
+      .prepare('SELECT id FROM hosts WHERE id = ? AND user_id = ?')
+      .get(data.jump_host_id, req.user.id);
+    if (!jump) return res.status(400).json({ error: 'bastion host not found' });
+  }
   const cols = Object.keys(data);
   if (cols.length) {
     db.prepare(
@@ -114,6 +137,38 @@ router.delete('/:id', (req, res) => {
   db.prepare('DELETE FROM hosts WHERE id = ?').run(existing.id);
   auditReq(req, 'host.deleted', `${existing.name} (${existing.hostname})`);
   res.json({ ok: true });
+});
+
+// ---- Reachability probe (parallel TCP connect, 20s cache per user) ----
+
+const statusCache = new Map(); // userId -> { at, result }
+
+function probePort(hostname, port) {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: hostname, port, timeout: 3000 });
+    const done = (status) => {
+      try { sock.destroy(); } catch {}
+      resolve(status);
+    };
+    sock.on('connect', () => done('up'));
+    sock.on('timeout', () => done('down'));
+    sock.on('error', () => done('down'));
+  });
+}
+
+router.get('/status', async (req, res) => {
+  const cached = statusCache.get(req.user.id);
+  if (cached && Date.now() - cached.at < 20000) return res.json({ status: cached.result });
+
+  const hosts = db
+    .prepare('SELECT id, hostname, port FROM hosts WHERE user_id = ?')
+    .all(req.user.id);
+  const entries = await Promise.all(
+    hosts.map((h) => probePort(h.hostname, h.port).then((s) => [h.id, s]))
+  );
+  const result = Object.fromEntries(entries);
+  statusCache.set(req.user.id, { at: Date.now(), result });
+  res.json({ status: result });
 });
 
 // ---- Known host keys (TOFU store) ----

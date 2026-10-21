@@ -74,6 +74,8 @@ function resolveConnectSpec(userId, input) {
     keepalive: host.keepalive,
     label: host.name || `${host.username}@${host.hostname}`,
     hostId: host.id,
+    jumpHostId: host.jump_host_id || null,
+    record: !!host.record,
   };
 
   if (host.auth_type === 'credential' && host.credential_id) {
@@ -175,6 +177,7 @@ function tryConnect(userId, spec, opts = {}) {
         password: password || undefined,
         privateKey: spec.privateKey || undefined,
         passphrase: spec.passphrase || undefined,
+        sock: opts.sock || undefined,
         tryKeyboard: true,
         readyTimeout: 20000,
         keepaliveInterval: (spec.keepalive ?? 15) * 1000,
@@ -190,6 +193,50 @@ function tryConnect(userId, spec, opts = {}) {
         },
       });
   });
+}
+
+// Connect to spec, optionally hopping through a saved bastion host
+// (ProxyJump). Host-key verification applies per hop: the bastion is
+// verified under its own hostname:port, the target under its own.
+// Errors from the bastion hop carry hopSpec so the caller can display the
+// right fingerprint in the trust prompt.
+async function establishConn(userId, spec, opts = {}) {
+  if (!spec.jumpHostId) return tryConnect(userId, spec, opts);
+
+  const jumpSpec = resolveConnectSpec(userId, { hostId: spec.jumpHostId });
+  if (jumpSpec.jumpHostId) {
+    throw Object.assign(new Error('nested bastion hops are not supported (max 1 jump)'), { code: 'error' });
+  }
+  if (!jumpSpec.password && !jumpSpec.privateKey) {
+    throw Object.assign(
+      new Error(`bastion '${jumpSpec.label}' has no stored credential — it can't prompt interactively`),
+      { code: 'error' }
+    );
+  }
+
+  let jumpConn;
+  try {
+    jumpConn = await tryConnect(userId, jumpSpec, opts.jump || {});
+  } catch (e) {
+    if (e.code === 'unknown_hostkey' || e.code === 'hostkey_mismatch') e.hopSpec = jumpSpec;
+    throw e;
+  }
+
+  try {
+    const sock = await new Promise((resolve, reject) => {
+      jumpConn.forwardOut('127.0.0.1', 0, spec.hostname, spec.port, (err, stream) =>
+        err ? reject(err) : resolve(stream)
+      );
+    });
+    const conn = await tryConnect(userId, spec, { ...opts, sock });
+    conn.on('close', () => {
+      try { jumpConn.end(); } catch {}
+    });
+    return conn;
+  } catch (e) {
+    try { jumpConn.end(); } catch {}
+    throw e;
+  }
 }
 
 // Create a registered session around an established connection.
@@ -215,6 +262,7 @@ function createSession(userId, conn, spec) {
     const s = sessions.get(id);
     if (s) {
       sessions.delete(id);
+      if (s.recorder) finalizeRecorder(s);
       try { s.ws?.send(JSON.stringify({ type: 'status', state: 'closed', message: 'connection closed' })); } catch {}
       try { s.ws?.close(); } catch {}
       for (const viewerWs of s.viewers.keys()) {
@@ -287,14 +335,28 @@ function destroySession(sessionId) {
   const s = sessions.get(sessionId);
   if (!s) return;
   sessions.delete(sessionId);
+  if (s.recorder) finalizeRecorder(s);
   try { s.ws?.close(); } catch {}
   try { s.conn.end(); } catch {}
+}
+
+// Flush a session's cast recorder and mark the recordings row complete.
+function finalizeRecorder(session) {
+  try {
+    const { size } = session.recorder.close();
+    db.prepare('UPDATE recordings SET ended_at = unixepoch(), size = ? WHERE id = ?').run(
+      size,
+      session.recorder.recId
+    );
+  } catch {}
+  session.recorder = null;
 }
 
 module.exports = {
   sessions,
   resolveConnectSpec,
   tryConnect,
+  establishConn,
   createSession,
   getSession,
   getSftp,
@@ -302,6 +364,7 @@ module.exports = {
   broadcastOutput,
   attachViewer,
   detachViewer,
+  finalizeRecorder,
   trustHostKey,
   listHostKeys,
   removeHostKey,

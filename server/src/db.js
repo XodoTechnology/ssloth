@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS shares (
 );
 CREATE INDEX IF NOT EXISTS idx_shares_session ON shares(session_id);
 
+CREATE TABLE IF NOT EXISTS recordings (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  label      TEXT NOT NULL DEFAULT '',
+  file       TEXT NOT NULL,
+  size       INTEGER NOT NULL DEFAULT 0,
+  started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  ended_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_user ON recordings(user_id);
+
 CREATE TABLE IF NOT EXISTS audit (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER,
@@ -123,6 +135,16 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit(created_at);
 `);
+
+// Lightweight column migrations for existing databases.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+ensureColumn('hosts', 'jump_host_id', 'jump_host_id INTEGER REFERENCES hosts(id) ON DELETE SET NULL');
+ensureColumn('hosts', 'record', 'record INTEGER NOT NULL DEFAULT 0');
 
 function audit(user, action, detail, req) {
   try {

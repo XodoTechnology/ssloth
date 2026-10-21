@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Settings as SettingsIcon, ShieldCheck, Fingerprint, Users, Trash2, Plus } from 'lucide-react';
+import {
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Fingerprint,
+  Users,
+  Trash2,
+  Plus,
+  Download,
+  Upload,
+} from 'lucide-react';
+import { useRef } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import Modal from '../components/Modal';
@@ -13,6 +23,9 @@ export default function Settings() {
   const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
   const [newUser, setNewUser] = useState(null); // bool
   const [nuForm, setNuForm] = useState({ username: '', password: '', is_admin: false });
+  const [expForm, setExpForm] = useState({ include: false, passphrase: '' });
+  const [impPass, setImpPass] = useState('');
+  const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
   const loadUsers = () =>
@@ -105,6 +118,41 @@ export default function Settings() {
       toast('password reset', 'success');
     } catch (e) {
       toast(e.message, 'error');
+    }
+  };
+
+  const doExport = async () => {
+    try {
+      const r = await api('/api/vault/export', {
+        method: 'POST',
+        body: { include_credentials: expForm.include, passphrase: expForm.passphrase || undefined },
+      });
+      const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `ssloth-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('vault exported', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const doImport = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const payload = JSON.parse(await f.text());
+      const r = await api('/api/vault/import', {
+        method: 'POST',
+        body: { payload, passphrase: impPass || undefined },
+      });
+      const c = r.imported;
+      toast(`imported ${c.hosts} hosts, ${c.credentials} credentials, ${c.snippets} snippets (${c.skipped} skipped)`, 'success');
+    } catch (e2) {
+      toast(e2.message, 'error');
     }
   };
 
@@ -218,6 +266,52 @@ export default function Settings() {
               <div className="py-4 text-center text-xs text-zinc-600">no trusted host keys yet</div>
             )}
           </div>
+        </section>
+
+        {/* vault backup */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Download size={15} className="text-emerald-400" /> Vault export / import
+          </h2>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                className="accent-emerald-600"
+                checked={expForm.include}
+                onChange={(e) => setExpForm((f) => ({ ...f, include: e.target.checked }))}
+              />
+              include credentials &amp; keys
+            </label>
+            {expForm.include && (
+              <input
+                className="input !w-56"
+                type="password"
+                placeholder="export passphrase (min 8)"
+                value={expForm.passphrase}
+                onChange={(e) => setExpForm((f) => ({ ...f, passphrase: e.target.value }))}
+              />
+            )}
+            <button className="btn-primary !py-1.5 text-xs" onClick={doExport}>
+              <Download size={13} /> Export
+            </button>
+            <span className="text-zinc-600">|</span>
+            <input
+              className="input !w-56"
+              type="password"
+              placeholder="import passphrase (if sealed)"
+              value={impPass}
+              onChange={(e) => setImpPass(e.target.value)}
+            />
+            <button className="btn-ghost border border-ink-700 !py-1.5 text-xs" onClick={() => impFile.current?.click()}>
+              <Upload size={13} /> Import file
+            </button>
+            <input ref={impFile} type="file" accept=".json" className="hidden" onChange={doImport} />
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-2">
+            secrets are sealed with your export passphrase (scrypt + AES-256-GCM) — the file alone can't be opened
+            without it. imports skip duplicates by name.
+          </p>
         </section>
 
         {/* users admin */}

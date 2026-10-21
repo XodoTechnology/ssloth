@@ -20,11 +20,28 @@ port forwards.
   All secrets encrypted at rest with AES-256-GCM.
 - **Auth modes** — saved credential, inline password, or *ask at connect*
   (password typed into the terminal, never stored).
+- **Split panes** — two terminals side-by-side in one tab, each its own
+  session (same or different hosts).
+- **Broadcast input** — toggle the radio button and your keystrokes go to
+  every open session at once (multi-exec).
+- **Command palette** — Ctrl+K fuzzy search across hosts, snippets, and
+  navigation.
+- **Session recording** — record terminal output to asciinema `.cast` files
+  (keystrokes never captured), per-session toggle or auto-record per host,
+  replay in-app or download.
+- **Bastion / ProxyJump** — hop through a saved jump host to reach private
+  targets; host keys are verified per hop.
+- **Host status** — live reachable/unreachable rings on host dots (server-side
+  TCP probe, cached).
+- **Import `~/.ssh/config`** — bulk-create hosts (and keys, if you attach the
+  private key files) including ProxyJump links.
+- **Encrypted vault export** — passphrase-sealed JSON export of hosts,
+  snippets, and optionally credentials; re-import skips duplicates.
 - **SFTP browser** — per-session file panel: browse, upload (button or
   drag-and-drop), download, mkdir, rename, recursive delete, upload progress.
 - **Snippets** — saved one-click commands runnable in the active terminal,
   with `{{variable}}` placeholders filled in at run time.
-- **Tunnels** — local port forwards through any saved host.
+- **Tunnels** — local port forwards through any saved host (bastions work).
 - **TOFU host-key pinning** — the server's host key fingerprint is shown and
   pinned on first connect; a changed key hard-blocks the session (MITM guard).
 - **Portal security** — scrypt-hashed accounts, httpOnly SameSite session

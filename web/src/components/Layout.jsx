@@ -8,15 +8,18 @@ import {
   ScrollText,
   Settings as SettingsIcon,
   LogOut,
+  Disc3,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
+import CommandPalette from './CommandPalette';
 
 const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
   { to: '/vault', label: 'Vault', icon: KeyRound },
   { to: '/snippets', label: 'Snippets', icon: Zap },
   { to: '/tunnels', label: 'Tunnels', icon: ArrowRightLeft },
+  { to: '/recordings', label: 'Recordings', icon: Disc3 },
   { to: '/audit', label: 'Audit Log', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
@@ -74,6 +77,7 @@ export default function Layout() {
       <main className="flex-1 min-w-0 flex flex-col bg-ink-950">
         <Outlet />
       </main>
+      <CommandPalette />
     </div>
   );
 }

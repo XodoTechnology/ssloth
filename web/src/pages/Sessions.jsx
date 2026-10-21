@@ -10,12 +10,13 @@ import {
   Zap,
   PanelLeftClose,
   PanelLeftOpen,
-  ChevronsUpDown,
+  FileUp,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 import HostForm from '../components/HostForm';
 import TerminalView from '../components/TerminalView';
+import SshConfigImport from '../components/SshConfigImport';
 
 const DOT_COLORS = {
   emerald: 'bg-emerald-500',
@@ -27,17 +28,35 @@ const DOT_COLORS = {
 };
 
 export default function Sessions() {
-  const { hosts, tabs, activeTabId, openTab, closeTab, setActiveTab, refreshAll, toast } = useStore();
+  const { hosts, tabs, activeTabId, openTab, closeTab, setActiveTab, refreshAll, toast, hostStatus, setHostStatus } =
+    useStore();
   const [sidebar, setSidebar] = useState(true);
   const [query, setQuery] = useState('');
   const [quick, setQuick] = useState('');
   const [editing, setEditing] = useState(null); // host object | 'new' | null
+  const [importing, setImporting] = useState(false);
   const [collapsed, setCollapsed] = useState({});
 
   useEffect(() => {
     refreshAll(api).catch((e) => toast(e.message, 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live reachability dots (server-side TCP probe, cached ~20s server-side).
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      api('/api/hosts/status')
+        .then((r) => alive && setHostStatus(r.status))
+        .catch(() => {});
+    poll();
+    const t = setInterval(poll, 30000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hosts.length]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -117,6 +136,13 @@ export default function Sessions() {
               <button className="btn-ghost !px-2 border border-ink-700" title="New host" onClick={() => setEditing('new')}>
                 <Plus size={14} />
               </button>
+              <button
+                className="btn-ghost !px-2 border border-ink-700"
+                title="Import ~/.ssh/config"
+                onClick={() => setImporting(true)}
+              >
+                <FileUp size={14} />
+              </button>
             </div>
           </div>
 
@@ -139,7 +165,22 @@ export default function Sessions() {
                       onClick={() => connectHost(h)}
                       title={`${h.username}@${h.hostname}:${h.port}`}
                     >
-                      <span className={`h-2 w-2 rounded-full shrink-0 ${DOT_COLORS[h.color] || 'bg-zinc-600'}`} />
+                      <span
+                        className={`h-2 w-2 rounded-full shrink-0 ${DOT_COLORS[h.color] || 'bg-zinc-600'} ${
+                          hostStatus[h.id] === 'up'
+                            ? 'ring-2 ring-emerald-500/60'
+                            : hostStatus[h.id] === 'down'
+                              ? 'ring-2 ring-red-500/60'
+                              : ''
+                        }`}
+                        title={
+                          hostStatus[h.id] === 'up'
+                            ? 'reachable'
+                            : hostStatus[h.id] === 'down'
+                              ? 'unreachable'
+                              : 'status unknown'
+                        }
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm text-zinc-200 truncate">{h.name}</div>
                         <div className="text-[11px] text-zinc-500 truncate font-mono">
@@ -246,6 +287,7 @@ export default function Sessions() {
           }}
         />
       )}
+      {importing && <SshConfigImport onClose={() => setImporting(false)} />}
     </div>
   );
 }

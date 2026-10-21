@@ -11,6 +11,7 @@ import Snippets from './pages/Snippets';
 import Tunnels from './pages/Tunnels';
 import Settings from './pages/Settings';
 import Audit from './pages/Audit';
+import Recordings from './pages/Recordings';
 import SharePage from './pages/SharePage';
 
 export default function App() {
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="/vault" element={<Vault />} />
           <Route path="/snippets" element={<Snippets />} />
           <Route path="/tunnels" element={<Tunnels />} />
+          <Route path="/recordings" element={<Recordings />} />
           <Route path="/audit" element={<Audit />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

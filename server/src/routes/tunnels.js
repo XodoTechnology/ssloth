@@ -4,7 +4,7 @@ const express = require('express');
 const net = require('net');
 const { db } = require('../db');
 const { auditReq } = require('../auth');
-const { resolveConnectSpec, tryConnect, getStoredHostKey } = require('../ssh/manager');
+const { resolveConnectSpec, tryConnect, establishConn, getStoredHostKey } = require('../ssh/manager');
 
 const router = express.Router();
 
@@ -90,7 +90,7 @@ router.post('/:id/start', async (req, res) => {
   }
 
   try {
-    const conn = await tryConnect(req.user.id, spec);
+    const conn = await establishConn(req.user.id, spec);
     const server = net.createServer((socket) => {
       conn.forwardOut(socket.remoteAddress, socket.remotePort, t.remote_host, t.remote_port, (err, stream) => {
         if (err) {

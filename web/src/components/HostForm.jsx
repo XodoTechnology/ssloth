@@ -14,7 +14,7 @@ const COLOR_DOT = {
 };
 
 export default function HostForm({ host, onClose, onSaved }) {
-  const { credentials, toast } = useStore();
+  const { credentials, toast, hosts } = useStore();
   const [form, setForm] = useState({
     name: host?.name || '',
     hostname: host?.hostname || '',
@@ -22,6 +22,8 @@ export default function HostForm({ host, onClose, onSaved }) {
     username: host?.username || '',
     auth_type: host?.auth_type || 'credential',
     credential_id: host?.credential_id || '',
+    jump_host_id: host?.jump_host_id || '',
+    record: !!host?.record,
     password: '',
     folder: host?.folder || '',
     color: host?.color || '',
@@ -45,6 +47,8 @@ export default function HostForm({ host, onClose, onSaved }) {
         username: form.username,
         auth_type: form.auth_type,
         credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
+        jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
+        record: !!form.record,
         folder: form.folder,
         color: form.color,
         notes: form.notes,
@@ -146,6 +150,31 @@ export default function HostForm({ host, onClose, onSaved }) {
             <label className="label">Keepalive (s)</label>
             <input className="input font-mono" type="number" min="0" max="300" value={form.keepalive} onChange={set('keepalive')} />
           </div>
+        </div>
+
+        <div>
+          <label className="label">Bastion / jump host (optional)</label>
+          <select className="input" value={form.jump_host_id} onChange={set('jump_host_id')}>
+            <option value="">— direct connection —</option>
+            {hosts
+              .filter((h) => h.id !== host?.id)
+              .map((h) => (
+                <option key={h.id} value={h.id}>
+                  via {h.name}
+                </option>
+              ))}
+          </select>
+        </div>
+        <div className="flex items-end pb-1">
+          <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-emerald-600"
+              checked={form.record}
+              onChange={(e) => setForm((f) => ({ ...f, record: e.target.checked }))}
+            />
+            auto-record sessions to this host
+          </label>
         </div>
 
         <div className="col-span-2">

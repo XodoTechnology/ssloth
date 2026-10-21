@@ -1,9 +1,10 @@
 'use strict';
 
-const { audit } = require('../db');
+const { db, audit } = require('../db');
+const { CastRecorder } = require('../ssh/recorder');
 const {
   resolveConnectSpec,
-  tryConnect,
+  establishConn,
   createSession,
   destroySession,
   trustHostKey,
@@ -69,10 +70,10 @@ function handleTerminalWs(ws, req, user) {
           audit(user, 'ssh.hostkey_trusted', `${pendingKey.hostname}:${pendingKey.port} ${pendingKey.fingerprint}`, req);
         }
         if (msg.accept === 'always' || msg.accept === 'once') {
-          const keyB64 = pendingKey.keyB64;
+          const { keyB64, hop } = pendingKey;
           pendingKey = null;
           awaiting = null;
-          connect({ acceptedKeyB64: keyB64 });
+          connect(hop === 'jump' ? { jumpAcceptedKeyB64: keyB64 } : { acceptedKeyB64: keyB64 });
         } else {
           send({ type: 'status', state: 'error', message: 'host key rejected' });
           ws.close();
@@ -95,6 +96,12 @@ function handleTerminalWs(ws, req, user) {
         if (stream) stream.setWindow(pendingResize.rows, pendingResize.cols, 0, 0);
         break;
 
+      case 'record':
+        if (!session) return;
+        if (msg.on && !session.recorder) startRecording();
+        if (!msg.on && session.recorder) stopRecording();
+        break;
+
       case 'close':
         ws.close();
         break;
@@ -111,28 +118,34 @@ function handleTerminalWs(ws, req, user) {
   });
 
   function connect(opts = {}) {
+    const jump = opts.jumpAcceptedKeyB64 ? { acceptedKeyB64: opts.jumpAcceptedKeyB64 } : undefined;
     send({ type: 'status', state: 'connecting', message: `connecting to ${spec.label} ...` });
-    tryConnect(user.id, spec, opts)
+    establishConn(user.id, spec, { acceptedKeyB64: opts.acceptedKeyB64, jump })
       .then((conn) => onConnected(conn))
       .catch((err) => {
         switch (err.code) {
-          case 'unknown_hostkey':
+          case 'unknown_hostkey': {
+            // hopSpec is the bastion when the failing hop is the jump host.
+            const hop = err.hopSpec || spec;
             pendingKey = {
-              hostname: spec.hostname,
-              port: spec.port,
+              hostname: hop.hostname,
+              port: hop.port,
               fingerprint: err.fingerprint,
               keyB64: err.keyB64,
               algorithm: err.algorithm,
+              hop: err.hopSpec ? 'jump' : 'target',
             };
             awaiting = 'trust';
             send({
               type: 'hostkey',
-              hostname: spec.hostname,
-              port: spec.port,
+              hostname: hop.hostname,
+              port: hop.port,
               fingerprint: err.fingerprint,
               algorithm: err.algorithm,
+              hop: pendingKey.hop,
             });
             break;
+          }
           case 'hostkey_mismatch':
             audit(user, 'ssh.hostkey_mismatch', `${spec.hostname}:${spec.port} saw ${err.fingerprint}, expected ${err.expected}`, req);
             send({
@@ -177,13 +190,16 @@ function handleTerminalWs(ws, req, user) {
         stream = s;
         session.stream = s;
         send({ type: 'ready', sessionId: session.id, label: spec.label });
+        if (spec.record) startRecording();
         stream.on('data', (chunk) => {
           if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
           broadcastOutput(session, chunk);
+          if (session.recorder) session.recorder.out(chunk);
         });
         stream.stderr?.on('data', (chunk) => {
           if (ws.readyState === ws.OPEN) ws.send(chunk, { binary: true });
           broadcastOutput(session, chunk);
+          if (session.recorder) session.recorder.out(chunk);
         });
         stream.on('close', () => {
           send({ type: 'status', state: 'closed', message: 'session ended' });
@@ -191,6 +207,27 @@ function handleTerminalWs(ws, req, user) {
         });
       }
     );
+  }
+
+  function startRecording() {
+    const rec = new CastRecorder(session.id, pendingResize.cols, pendingResize.rows, session.label);
+    session.recorder = rec;
+    const info = db
+      .prepare('INSERT INTO recordings (user_id, session_id, label, file) VALUES (?, ?, ?, ?)')
+      .run(user.id, session.id, session.label, rec.file);
+    rec.recId = info.lastInsertRowid;
+    send({ type: 'recording', on: true });
+    audit(user, 'recording.started', session.label, req);
+  }
+
+  function stopRecording() {
+    const { size } = session.recorder.close();
+    db.prepare('UPDATE recordings SET ended_at = unixepoch(), size = ? WHERE id = ?').run(
+      size,
+      session.recorder.recId
+    );
+    session.recorder = null;
+    send({ type: 'recording', on: false });
   }
 
   // Nothing happens until the client sends 'connect'. For 'ask' auth the
