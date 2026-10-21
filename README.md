@@ -55,7 +55,7 @@ npm run build              # produce web/dist (served by the server in prod)
 ## Configuration
 
 | Variable | Purpose |
-|---|---|
+| --- | --- |
 | `SSLOTH_MASTER_KEY` | Secret that encrypts all stored credentials/keys (recommended in production). If unset, a random key is generated at `data/master.key` (mode 0600). |
 | `SSLOTH_DATA_DIR` | Where the SQLite DB and master key live (default `server/data`, `/data` in Docker). |
 | `SSLOTH_SECURE_COOKIES` | `true` when behind HTTPS — marks session cookies `Secure`. |
@@ -72,7 +72,7 @@ npm run build              # produce web/dist (served by the server in prod)
 
 ## Architecture
 
-```
+```text
 browser ──HTTPS──> express (static SPA + JSON API + cookie auth)
 browser ──WSS───> /ws/terminal ──ssh2──> your servers
 browser ──HTTPS─> /api/sftp/* ────ssh2 SFTP──> same servers
