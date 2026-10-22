@@ -2,15 +2,19 @@
 
 const express = require('express');
 const net = require('net');
+const dgram = require('dgram');
 const { db } = require('../db');
 const { encryptSecret } = require('../crypto');
 const { auditReq } = require('../auth');
-const { listHostKeys, removeHostKey } = require('../ssh/manager');
+const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey } = require('../ssh/manager');
+const { scanHostKey } = require('../ssh/keyscan');
+const { getHealthHistory, latestHealth } = require('../health');
 
 const router = express.Router();
 const { stopTunnelsForHost } = require('./tunnels');
 
 const AUTH_TYPES = new Set(['credential', 'password', 'ask']);
+const PROTOCOLS = new Set(['ssh', 'telnet']);
 
 function cleanHostInput(body, { partial = false } = {}) {
   const out = {};
@@ -58,6 +62,19 @@ function cleanHostInput(body, { partial = false } = {}) {
   if (!partial || body.keepalive !== undefined) {
     const k = parseInt(body.keepalive, 10);
     out.keepalive = Number.isInteger(k) && k >= 0 && k <= 300 ? k : 15;
+  }
+  if (!partial || body.protocol !== undefined) {
+    const p = String(body.protocol ?? 'ssh').toLowerCase();
+    if (!PROTOCOLS.has(p)) throw new Error('invalid protocol');
+    out.protocol = p;
+  }
+  if (!partial || body.mac !== undefined) {
+    const mac = str(body.mac, 17).toUpperCase();
+    if (mac && !/^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/.test(mac)) throw new Error('invalid MAC address');
+    out.mac = mac;
+  }
+  if (!partial || body.agent_forward !== undefined) {
+    out.agent_forward = body.agent_forward ? 1 : 0;
   }
   // Secret fields are only updated when explicitly provided.
   if (body.password !== undefined) {
@@ -230,6 +247,86 @@ router.delete('/hostkeys/:id', (req, res) => {
   if (!removeHostKey(req.user.id, req.params.id)) return res.status(404).json({ error: 'not found' });
   auditReq(req, 'ssh.hostkey_removed', `hostkey id ${req.params.id}`);
   res.json({ ok: true });
+});
+
+// ---- ssh-keyscan: fetch a host's public key without trusting it yet.
+// POST /hostkeys/scan { hosts: [{hostname,port}] | host_ids: [..], trust }
+// Returns per-host { fingerprint, algorithm, trusted } so the UI can show
+// what will be pinned before the user commits to it.
+const scanLimiter = new Map(); // crude per-user rate cap
+router.post('/hostkeys/scan', async (req, res) => {
+  const last = scanLimiter.get(req.user.id) || 0;
+  if (Date.now() - last < 3000) return res.status(429).json({ error: 'slow down' });
+  scanLimiter.set(req.user.id, Date.now());
+
+  const targets = [];
+  for (const h of req.body?.hosts || []) {
+    const hostname = String(h.hostname || '').trim();
+    const port = Math.min(Math.max(parseInt(h.port, 10) || 22, 1), 65535);
+    if (hostname && hostname.length <= 255) targets.push({ hostname, port });
+  }
+  for (const id of req.body?.host_ids || []) {
+    const row = db.prepare('SELECT hostname, port FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(id, req.user.id);
+    if (row) targets.push({ hostname: row.hostname, port: row.port });
+  }
+  if (!targets.length || targets.length > 50) {
+    return res.status(400).json({ error: '1–50 scan targets required' });
+  }
+
+  const results = [];
+  const trust = !!req.body.trust;
+  const BATCH = 8;
+  for (let i = 0; i < targets.length; i += BATCH) {
+    const batch = await Promise.all(
+      targets.slice(i, i + BATCH).map(async (t) => {
+        const r = await scanHostKey(t.hostname, t.port);
+        if (!r.ok) return { ...t, ok: false, error: r.error };
+        const stored = getStoredHostKey(req.user.id, t.hostname, t.port);
+        const entry = {
+          ...t, ok: true,
+          fingerprint: r.fingerprint, algorithm: r.algorithm, key_b64: r.keyB64,
+          already_trusted: !!stored,
+          changed: stored ? stored.key_b64 !== r.keyB64 : false,
+        };
+        if (trust) {
+          trustHostKey(req.user.id, t.hostname, t.port, r.keyB64, r.algorithm);
+          entry.trusted = true;
+        }
+        return entry;
+      })
+    );
+    results.push(...batch);
+  }
+  auditReq(req, 'ssh.hostkey_scan', `${targets.length} targets${trust ? ' (trusted)' : ''}`);
+  res.json({ results });
+});
+
+// ---- Wake-on-LAN ----
+router.post('/:id/wol', (req, res) => {
+  const host = db.prepare('SELECT mac, name FROM hosts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!host) return res.status(404).json({ error: 'not found' });
+  const mac = (host.mac || '').replace(/[:-]/g, '');
+  if (!/^[0-9a-fA-F]{12}$/.test(mac)) return res.status(400).json({ error: 'no MAC address on this host' });
+  const macBuf = Buffer.from(mac, 'hex');
+  const packet = Buffer.concat([Buffer.alloc(6, 0xff), ...Array(16).fill(macBuf)]);
+  const sock = dgram.createSocket('udp4');
+  sock.once('error', () => { try { sock.close(); } catch {} });
+  sock.bind(() => {
+    sock.setBroadcast(true);
+    sock.send(packet, 0, packet.length, 9, '255.255.255.255', (err) => {
+      try { sock.close(); } catch {}
+      if (err) return res.status(500).json({ error: 'broadcast failed' });
+      auditReq(req, 'host.wol', `${host.name} (${host.mac})`);
+      res.json({ ok: true });
+    });
+  });
+});
+
+// ---- health history (written by the background sweeper) ----
+router.get('/:id/health', (req, res) => {
+  const own = db.prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(req.params.id, req.user.id);
+  if (!own) return res.status(404).json({ error: 'not found' });
+  res.json({ history: getHealthHistory(own.id), current: latestHealth(own.id) });
 });
 
 module.exports = router;

@@ -254,6 +254,72 @@ router.post('/:sid/delete', json, async (req, res) => {
   }
 });
 
+// Recursive file listing for folder sync — files only (dirs implied),
+// bounded so a pathological tree can't run away.
+const RLIST_DEPTH = 12;
+const RLIST_MAX = 50000;
+router.get('/:sid/rlist', async (req, res) => {
+  const ctx = await requireSftp(req, res);
+  if (!ctx) return;
+  const p = cleanPathParam(req.query.path);
+  if (p === null) return res.status(400).json({ error: 'bad path' });
+  try {
+    const real = await pRealpath(ctx.sftp, p || '.');
+    const files = [];
+    const walk = async (dir, depth) => {
+      if (depth > RLIST_DEPTH || files.length >= RLIST_MAX) return;
+      const list = await pReaddir(ctx.sftp, dir);
+      for (const e of list) {
+        if (e.filename === '.' || e.filename === '..') continue;
+        const full = path.posix.join(dir, e.filename);
+        const v = entryView(e);
+        if (v.is_dir) await walk(full, depth + 1);
+        else files.push({ path: full.slice(real.length + 1) || e.filename, size: v.size, mtime: v.mtime });
+        if (files.length >= RLIST_MAX) return;
+      }
+    };
+    const st = await pStat(ctx.sftp, real);
+    if ((st.mode & S_IFMT) === S_IFDIR) await walk(real, 0);
+    else files.push({ path: path.posix.basename(real), size: st.size, mtime: st.mtime * 1000 });
+    res.json({ path: real, files, truncated: files.length >= RLIST_MAX });
+  } catch (e) {
+    sftpError(res, e, 'recursive list failed');
+  }
+});
+
+// Pull a remote directory as a tar.gz streamed off `tar` on the remote.
+router.get('/:sid/tar', async (req, res) => {
+  const session = getSession(req.user.id, req.params.sid);
+  if (!session) return res.status(404).json({ error: 'session not found or expired' });
+  const p = cleanPathParam(req.query.path);
+  if (p === null || p === '/' || p === '.') return res.status(400).json({ error: 'bad path' });
+  const name = path.posix.basename(p) || 'dir';
+  const cmd = `tar czf - -C ${shellQuote(path.posix.dirname(p))} ${shellQuote(path.posix.basename(p))}`;
+  try {
+    session.conn.exec(cmd, (err, ch) => {
+      if (err) return res.status(500).json({ error: 'exec failed: ' + err.message });
+      res.setHeader('Content-Type', 'application/gzip');
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}.tar.gz`);
+      let errText = '';
+      ch.stderr?.on('data', (d) => { errText += d.toString(); });
+      ch.on('close', (code) => {
+        if (!res.headersSent && code !== 0) {
+          return res.status(400).json({ error: `tar failed: ${errText.slice(0, 200)}` });
+        }
+      });
+      res.on('close', () => { if (!res.writableEnded) try { ch.close(); } catch {} });
+      ch.pipe(res);
+      auditReq(req, 'sftp.tardl', `${session.label}:${p}`);
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, "'\\''")}'`;
+}
+
 // lstat (not stat): a symlink inside the tree must be unlinked as a link —
 // stat() would follow it into the target directory and delete its contents.
 async function rmrf(sftp, p, depth) {

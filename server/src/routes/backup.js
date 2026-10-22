@@ -56,6 +56,10 @@ router.post('/export', async (req, res) => {
   const credById = new Map(creds.map((c) => [c.id, c]));
   const hostById = new Map(hosts.map((h) => [h.id, h]));
 
+  // A row that fails to decrypt (e.g. master key rotated since it was
+  // written) must not kill the export — degrade it to "no secret" instead.
+  let undecryptable = 0;
+
   const outHosts = hosts.map((h) => {
     const entry = {
       name: h.name,
@@ -63,6 +67,9 @@ router.post('/export', async (req, res) => {
       port: h.port,
       username: h.username,
       auth_type: h.auth_type,
+      protocol: h.protocol,
+      mac: h.mac,
+      agent_forward: h.agent_forward,
       folder: h.folder,
       region: h.region,
       tags: h.tags,
@@ -77,9 +84,14 @@ router.post('/export', async (req, res) => {
     };
     if (h.password_enc) {
       if (include_credentials) {
-        const ref = `h${h.id}`;
-        secrets[ref] = decryptSecret(h.password_enc);
-        entry.password_ref = ref;
+        try {
+          const ref = `h${h.id}`;
+          secrets[ref] = decryptSecret(h.password_enc);
+          entry.password_ref = ref;
+        } catch {
+          undecryptable++;
+          entry.password_ref = null;
+        }
       } else {
         entry.password_ref = null;
       }
@@ -89,16 +101,22 @@ router.post('/export', async (req, res) => {
 
   const outCreds = include_credentials
     ? creds.map((c) => {
-        const ref = `c${c.id}`;
-        secrets[ref] = JSON.parse(decryptSecret(c.secret_enc));
-        return {
+        const out = {
           name: c.name,
           type: c.type,
           username: c.username,
           comment: c.comment,
           public_key: c.public_key,
-          secret_ref: ref,
         };
+        try {
+          const ref = `c${c.id}`;
+          secrets[ref] = JSON.parse(decryptSecret(c.secret_enc));
+          out.secret_ref = ref;
+        } catch {
+          undecryptable++;
+          out.undecryptable = true;
+        }
+        return out;
       })
     : undefined;
 
@@ -110,7 +128,7 @@ router.post('/export', async (req, res) => {
     sealed = await sealSecrets(secrets, passphrase);
   }
 
-  auditReq(req, 'vault.exported', `${outHosts.length} hosts, ${outCreds?.length || 0} credentials, ${snippets.length} snippets`);
+  auditReq(req, 'vault.exported', `${outHosts.length} hosts, ${outCreds?.length || 0} credentials, ${snippets.length} snippets${undecryptable ? `, ${undecryptable} undecryptable` : ''}`);
   res.json({
     ssloth_export: {
       version: 2,
@@ -210,8 +228,9 @@ router.post('/import', async (req, res) => {
       const info = db
         .prepare(
           `INSERT INTO hosts (user_id, name, hostname, port, username, auth_type, credential_id,
-            password_enc, folder, region, tags, pinned, record, shared, color, notes, keepalive)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            password_enc, folder, region, tags, pinned, record, shared, color, notes, keepalive,
+            protocol, mac, agent_forward)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           req.user.id,
@@ -232,7 +251,10 @@ router.post('/import', async (req, res) => {
           req.user.is_admin && h.shared ? 1 : 0,
           String(h.color || '').slice(0, 32),
           String(h.notes || '').slice(0, 4000),
-          parseInt(h.keepalive, 10) || 15
+          parseInt(h.keepalive, 10) || 15,
+          h.protocol === 'telnet' ? 'telnet' : 'ssh',
+          (h.mac ? String(h.mac).slice(0, 17).toUpperCase() : ''),
+          h.agent_forward ? 1 : 0
         );
       hostNameToId.set(h.name, info.lastInsertRowid);
       if (h.jump_host_name) pendingJumps.push({ hostId: info.lastInsertRowid, jumpHostName: h.jump_host_name });

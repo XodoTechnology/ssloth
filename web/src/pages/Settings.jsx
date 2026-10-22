@@ -11,6 +11,10 @@ import {
   Palette,
   Keyboard,
   Lock,
+  Webhook,
+  KeySquare,
+  Zap,
+  Radar,
 } from 'lucide-react';
 import { useRef } from 'react';
 import { api } from '../api';
@@ -35,17 +39,107 @@ export default function Settings() {
   const [termTheme, setTermTheme] = useState(localStorage.getItem('ssloth.termTheme') || 'dark');
   const [pinForm, setPinForm] = useState({ pin: '', password: '' });
   const [idleMin, setIdleMin] = useState(localStorage.getItem('ssloth_idle_min') || '0');
+  const [webhooks, setWebhooks] = useState([]);
+  const [whForm, setWhForm] = useState({ url: '', events: '*' });
+  const [tokens, setTokens] = useState([]);
+  const [tokForm, setTokForm] = useState({ name: '', scopes: ['read'], expires_days: 90 });
+  const [freshToken, setFreshToken] = useState(null);
+  const [scanForm, setScanForm] = useState('');
+  const [scanResults, setScanResults] = useState(null);
+  const [scanning, setScanning] = useState(false);
   const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
   const loadUsers = () =>
     user?.is_admin && api('/api/admin/users').then((r) => setUsers(r.users)).catch(() => {});
+  const loadWebhooks = () => api('/api/webhooks').then((r) => setWebhooks(r.webhooks)).catch(() => {});
+  const loadTokens = () => api('/api/tokens').then((r) => setTokens(r.tokens)).catch(() => {});
 
   useEffect(() => {
     loadHostkeys();
     loadUsers();
+    loadWebhooks();
+    loadTokens();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.is_admin]);
+
+  const addWebhook = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/webhooks', { method: 'POST', body: whForm });
+      setWhForm({ url: '', events: '*' });
+      loadWebhooks();
+      toast('webhook added', 'success');
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
+  const toggleWebhook = async (w) => {
+    await api(`/api/webhooks/${w.id}`, { method: 'PUT', body: { enabled: !w.enabled } });
+    loadWebhooks();
+  };
+
+  const testWebhook = async (w) => {
+    const r = await api(`/api/webhooks/${w.id}/test`, { method: 'POST' });
+    toast(r.ok ? 'test delivered' : 'delivery failed — check the URL', r.ok ? 'success' : 'error');
+  };
+
+  const delWebhook = async (w) => {
+    await api(`/api/webhooks/${w.id}`, { method: 'DELETE' });
+    loadWebhooks();
+  };
+
+  const createToken = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api('/api/tokens', { method: 'POST', body: tokForm });
+      setFreshToken(r.token);
+      setTokForm({ name: '', scopes: ['read'], expires_days: 90 });
+      loadTokens();
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
+  const revokeToken = async (t) => {
+    if (!confirm(`Revoke token "${t.name}"? Requests using it will fail immediately.`)) return;
+    await api(`/api/tokens/${t.id}`, { method: 'DELETE' });
+    loadTokens();
+  };
+
+  // ssh-keyscan: paste "host[:port]" lines, scan, then trust.
+  const runScan = async (trust) => {
+    const targets = scanForm
+      .split(/[\n,;]+/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const m = l.match(/^(.+?)(?::(\d+))?$/);
+        return { hostname: m[1], port: m[2] ? parseInt(m[2], 10) : 22 };
+      });
+    if (!targets.length) return toast('enter host[:port] lines first', 'error');
+    setScanning(true);
+    try {
+      const r = await api('/api/hosts/hostkeys/scan', { method: 'POST', body: { hosts: targets, trust } });
+      setScanResults(r.results);
+      if (trust) loadHostkeys();
+    } catch (e2) {
+      toast(e2.message, 'error');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const setRole = async (u, role) => {
+    try {
+      await api(`/api/admin/users/${u.id}/role`, { method: 'POST', body: { role } });
+      loadUsers();
+      toast(`${u.username} → ${role}`, 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
 
   const changePw = async (e) => {
     e.preventDefault();
@@ -396,6 +490,48 @@ export default function Settings() {
               <div className="py-4 text-center text-xs text-zinc-600">no trusted host keys yet</div>
             )}
           </div>
+
+          {/* ssh-keyscan: pre-seed trust before first connect */}
+          <div className="mt-3 border-t border-ink-700/60 pt-3">
+            <div className="flex items-center gap-2 text-xs text-zinc-400 mb-2">
+              <Radar size={12} className="text-sky-400" /> ssh-keyscan — pre-seed trusted keys
+            </div>
+            <textarea
+              className="input font-mono !text-[11px]"
+              rows="2"
+              placeholder={'one per line: host[:port]\n10.0.0.5\nprod-web-01:2222'}
+              value={scanForm}
+              onChange={(e) => setScanForm(e.target.value)}
+            />
+            <div className="flex gap-2 mt-2">
+              <button className="btn-ghost border border-ink-700 !py-1 text-xs" onClick={() => runScan(false)} disabled={scanning || !scanForm.trim()}>
+                {scanning ? '…' : 'scan (preview)'}
+              </button>
+              <button className="btn-primary !py-1 text-xs" onClick={() => runScan(true)} disabled={scanning || !scanForm.trim()}>
+                scan & trust
+              </button>
+            </div>
+            {scanResults && (
+              <div className="mt-2 space-y-1">
+                {scanResults.map((r, i) => (
+                  <div key={i} className="flex items-center gap-2 text-[11px] font-mono rounded bg-ink-900 border border-ink-700 px-2 py-1.5">
+                    <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${r.ok ? (r.changed ? 'bg-red-500' : 'bg-emerald-500') : 'bg-zinc-600'}`} />
+                    <span className="text-zinc-300">{r.hostname}:{r.port}</span>
+                    {r.ok ? (
+                      <>
+                        <span className="text-zinc-500 truncate">{r.algorithm} {r.fingerprint}</span>
+                        {r.changed && <span className="text-red-400 font-semibold shrink-0">KEY CHANGED — was {r.already_trusted ? 'trusted' : 'unknown'}</span>}
+                        {!r.changed && r.already_trusted && <span className="text-zinc-600 shrink-0">already trusted</span>}
+                        {r.trusted && <span className="text-emerald-400 shrink-0">trusted</span>}
+                      </>
+                    ) : (
+                      <span className="text-zinc-600">{r.error}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         {/* idle auto-lock */}
@@ -472,6 +608,149 @@ export default function Settings() {
           </p>
         </section>
 
+        {/* webhooks */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
+            <Webhook size={15} className="text-emerald-400" /> Webhook notifications
+          </h2>
+          <p className="text-[11px] text-zinc-500 mb-3">
+            POSTed on host down/up, playbook runs finishing, etc. Slack, Discord and ntfy.sh payloads are detected
+            automatically; anything else gets <code className="font-mono">{'{event, message, ts}'}</code>.
+          </p>
+          <form onSubmit={addWebhook} className="flex flex-wrap items-end gap-3 mb-3">
+            <div className="flex-1 min-w-48">
+              <label className="label">URL</label>
+              <input
+                className="input font-mono !text-xs"
+                placeholder="https://ntfy.sh/my-topic or a slack/discord webhook"
+                value={whForm.url}
+                onChange={(e) => setWhForm((f) => ({ ...f, url: e.target.value }))}
+              />
+            </div>
+            <div className="w-44">
+              <label className="label">Events</label>
+              <input
+                className="input font-mono !text-xs"
+                placeholder="* or host.down,playbook.done"
+                value={whForm.events}
+                onChange={(e) => setWhForm((f) => ({ ...f, events: e.target.value }))}
+              />
+            </div>
+            <button className="btn-primary !py-1.5 text-xs" disabled={!whForm.url.trim()}>
+              <Plus size={13} /> Add
+            </button>
+          </form>
+          <div className="divide-y divide-ink-700/50">
+            {webhooks.map((w) => (
+              <div key={w.id} className="flex items-center gap-3 py-2">
+                <button
+                  className={`h-2 w-2 rounded-full shrink-0 ${w.enabled ? 'bg-emerald-500' : 'bg-zinc-600'}`}
+                  title={w.enabled ? 'enabled — click to disable' : 'disabled — click to enable'}
+                  onClick={() => toggleWebhook(w)}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-mono text-zinc-200 truncate">{w.url}</div>
+                  <div className="text-[10px] font-mono text-zinc-500">{w.events}</div>
+                </div>
+                <button className="btn-ghost !p-1.5" title="send a test" onClick={() => testWebhook(w)}>
+                  <Zap size={13} />
+                </button>
+                <button className="btn-ghost !p-1.5 hover:text-red-400" onClick={() => delWebhook(w)}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+            {webhooks.length === 0 && (
+              <div className="py-3 text-center text-xs text-zinc-600">no webhooks configured</div>
+            )}
+          </div>
+        </section>
+
+        {/* API tokens */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
+            <KeySquare size={15} className="text-emerald-400" /> API tokens
+          </h2>
+          <p className="text-[11px] text-zinc-500 mb-3">
+            Scoped bearer tokens for scripts: <code className="font-mono">Authorization: Bearer slo_…</code>. Shown
+            once at creation.
+          </p>
+          <form onSubmit={createToken} className="flex flex-wrap items-end gap-3 mb-3">
+            <div>
+              <label className="label">Name</label>
+              <input
+                className="input !w-44"
+                placeholder="ci-nightly"
+                value={tokForm.name}
+                onChange={(e) => setTokForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="label">Scopes</label>
+              <div className="flex gap-3 text-xs text-zinc-300 items-center h-9">
+                {[['read', 'read'], ['playbooks:run', 'run playbooks'], ['vault', 'vault export']].map(([v, l]) => (
+                  <label key={v} className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="accent-emerald-600"
+                      checked={tokForm.scopes.includes(v)}
+                      onChange={(e) =>
+                        setTokForm((f) => ({
+                          ...f,
+                          scopes: e.target.checked ? [...f.scopes, v] : f.scopes.filter((s) => s !== v),
+                        }))
+                      }
+                    />
+                    {l}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="label">Expires</label>
+              <select
+                className="input !w-28"
+                value={tokForm.expires_days}
+                onChange={(e) => setTokForm((f) => ({ ...f, expires_days: parseInt(e.target.value, 10) }))}
+              >
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+                <option value={365}>1 year</option>
+                <option value={0}>never</option>
+              </select>
+            </div>
+            <button className="btn-primary !py-1.5 text-xs" disabled={!tokForm.name.trim() || !tokForm.scopes.length}>
+              <Plus size={13} /> Create
+            </button>
+          </form>
+          {freshToken && (
+            <div className="mb-3 rounded-md border border-emerald-800 bg-emerald-950/40 p-2.5 space-y-1">
+              <div className="text-[11px] text-emerald-300 font-medium">token created — copy it now, it won't be shown again</div>
+              <code className="block font-mono text-[11px] text-emerald-200 break-all">{freshToken}</code>
+            </div>
+          )}
+          <div className="divide-y divide-ink-700/50">
+            {tokens.map((t) => (
+              <div key={t.id} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-zinc-200">{t.name}</div>
+                  <div className="text-[10px] font-mono text-zinc-500">
+                    {t.scopes.join(' ')}
+                    {t.last_used ? ` · last used ${new Date(t.last_used).toLocaleDateString()}` : ' · never used'}
+                    {t.expires_at ? ` · expires ${new Date(t.expires_at).toLocaleDateString()}` : ' · no expiry'}
+                  </div>
+                </div>
+                <button className="btn-ghost !p-1.5 hover:text-red-400" onClick={() => revokeToken(t)}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+            {tokens.length === 0 && (
+              <div className="py-3 text-center text-xs text-zinc-600">no API tokens</div>
+            )}
+          </div>
+        </section>
+
         {/* users admin */}
         {user?.is_admin && (
           <section className="card p-4">
@@ -489,10 +768,23 @@ export default function Settings() {
                   <div className="flex-1">
                     <span className="text-sm text-zinc-200">{u.username}</span>
                     <span className="ml-2 text-[10px] text-zinc-500">
-                      {u.is_admin ? 'admin' : 'user'}
-                      {u.totp_enabled ? ' · 2fa' : ''}
+                      {u.totp_enabled ? '2fa' : ''}
                     </span>
                   </div>
+                  {u.id !== user.id ? (
+                    <select
+                      className="input !w-24 !py-1 !text-[11px]"
+                      value={u.role || (u.is_admin ? 'admin' : 'user')}
+                      onChange={(e) => setRole(u, e.target.value)}
+                      title="admin: full access · user: normal · viewer: read-only"
+                    >
+                      <option value="admin">admin</option>
+                      <option value="user">user</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                  ) : (
+                    <span className="text-[10px] uppercase font-semibold text-emerald-400 px-1">{u.role || 'admin'}</span>
+                  )}
                   <button className="btn-ghost !py-1 text-xs" onClick={() => resetPw(u)}>
                     reset pw
                   </button>
@@ -519,15 +811,20 @@ export default function Settings() {
               <label className="label">Password (min 10)</label>
               <input className="input" type="password" value={nuForm.password} onChange={(e) => setNuForm((f) => ({ ...f, password: e.target.value }))} />
             </div>
-            <label className="flex items-center gap-2 text-sm text-zinc-300">
-              <input
-                type="checkbox"
-                checked={nuForm.is_admin}
-                onChange={(e) => setNuForm((f) => ({ ...f, is_admin: e.target.checked }))}
-                className="accent-emerald-600"
-              />
-              administrator
-            </label>
+            <div>
+              <label className="label">Role</label>
+              <select
+                className="input"
+                value={nuForm.is_admin ? 'admin' : nuForm.role || 'user'}
+                onChange={(e) =>
+                  setNuForm((f) => ({ ...f, is_admin: e.target.value === 'admin', role: e.target.value }))
+                }
+              >
+                <option value="user">user — normal access</option>
+                <option value="viewer">viewer — read-only</option>
+                <option value="admin">admin — full access</option>
+              </select>
+            </div>
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setNewUser(false)}>
                 Cancel

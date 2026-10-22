@@ -93,7 +93,9 @@ export default function Layout() {
         <div className="border-t border-ink-700 p-3 flex items-center justify-between">
           <div className="min-w-0">
             <div className="text-sm text-zinc-200 truncate">{user?.username}</div>
-            <div className="text-[11px] text-zinc-500">{user?.is_admin ? 'administrator' : 'user'}</div>
+            <div className="text-[11px] text-zinc-500">
+              {user?.role === 'viewer' ? 'viewer (read-only)' : user?.is_admin ? 'administrator' : 'user'}
+            </div>
           </div>
           <div className="flex items-center">
             <button

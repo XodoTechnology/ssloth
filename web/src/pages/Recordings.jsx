@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Disc3, Play, Download, Trash2, Pause } from 'lucide-react';
+import { Disc3, Play, Download, Trash2, Pause, Search } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 import Modal from '../components/Modal';
@@ -9,10 +9,28 @@ import '@xterm/xterm/css/xterm.css';
 
 export default function Recordings() {
   const [rows, setRows] = useState([]);
-  const [playing, setPlaying] = useState(null);
+  const [playing, setPlaying] = useState(null); // {rec, startT?}
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [hits, setHits] = useState(null); // null = no search, [] = no matches
   const { toast } = useStore();
 
   const load = () => api('/api/recordings').then((r) => setRows(r.recordings)).catch((e) => toast(e.message, 'error'));
+
+  const doSearch = async (e) => {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return setHits(null);
+    setSearching(true);
+    try {
+      const r = await api(`/api/recordings/search?q=${encodeURIComponent(q)}`);
+      setHits(r.results);
+    } catch (e2) {
+      toast(e2.message, 'error');
+    } finally {
+      setSearching(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -41,6 +59,59 @@ export default function Recordings() {
           Terminal output captured as asciinema casts (keystrokes are never recorded). Toggle recording from the
           terminal toolbar or per-host with "auto-record".
         </p>
+
+        <form onSubmit={doSearch} className="flex gap-2">
+          <div className="relative flex-1">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <input
+              className="input !py-1.5 !pl-7 text-xs font-mono"
+              placeholder="search recording output — e.g. rm -rf, apt install, an IP…"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (!e.target.value.trim()) setHits(null);
+              }}
+            />
+          </div>
+          <button className="btn-ghost border border-ink-700 !py-1.5 text-xs" disabled={searching || !query.trim()}>
+            {searching ? '…' : 'search'}
+          </button>
+          {hits !== null && (
+            <button type="button" className="btn-ghost !py-1.5 text-xs" onClick={() => { setHits(null); setQuery(''); }}>
+              clear
+            </button>
+          )}
+        </form>
+
+        {hits !== null && (
+          <div className="card divide-y divide-ink-700/60">
+            <div className="px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+              {hits.length} recording{hits.length === 1 ? '' : 's'} contain "{query}"
+            </div>
+            {hits.map((h) => (
+              <div key={h.id} className="flex items-center gap-3 px-4 py-2.5">
+                <Search size={13} className="text-emerald-400 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-zinc-200 truncate">{h.label}</div>
+                  <div className="text-[11px] text-zinc-500 font-mono">
+                    {new Date(h.started_at).toLocaleString()} · {h.hits} hit{h.hits === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <button
+                  className="btn-ghost !py-1 text-xs"
+                  title="replay from first match"
+                  onClick={() => {
+                    const rec = rows.find((r) => r.id === h.id);
+                    if (rec) setPlaying({ rec, startT: h.first_t });
+                  }}
+                >
+                  <Play size={13} /> from match
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="card divide-y divide-ink-700/60">
           {rows.map((r) => (
             <div key={r.id} className="flex items-center gap-3 px-4 py-2.5">
@@ -51,7 +122,7 @@ export default function Recordings() {
                   {new Date(r.started_at).toLocaleString()} · {fmtDur(r)} · {(r.size / 1024).toFixed(1)}K
                 </div>
               </div>
-              <button className="btn-ghost !py-1 text-xs" onClick={() => setPlaying(r)}>
+              <button className="btn-ghost !py-1 text-xs" onClick={() => setPlaying({ rec: r })}>
                 <Play size={13} /> replay
               </button>
               <a className="btn-ghost !py-1 text-xs" href={`/api/recordings/${r.id}/content?download=1`} download>
@@ -69,12 +140,12 @@ export default function Recordings() {
           )}
         </div>
       </div>
-      {playing && <CastPlayer rec={playing} onClose={() => setPlaying(null)} />}
+      {playing && <CastPlayer rec={playing.rec} startT={playing.startT} onClose={() => setPlaying(null)} />}
     </div>
   );
 }
 
-function CastPlayer({ rec, onClose }) {
+function CastPlayer({ rec, startT, onClose }) {
   const ref = useRef(null);
   const termRef = useRef(null);
   const timerRef = useRef(null);
@@ -111,6 +182,17 @@ function CastPlayer({ rec, onClose }) {
             }
           })
           .filter((e) => e && e[1] === 'o');
+        // "replay from match": fast-write everything before the match point
+        // instantly so the screen state is correct, then let the user hit play.
+        if (startT != null) {
+          const evs = eventsRef.current;
+          let i = 0;
+          while (i < evs.length && evs[i][0] < startT) {
+            term.write(evs[i][2]);
+            i++;
+          }
+          posRef.current = i;
+        }
         setState('ready');
       })
       .catch(() => setState('error'));

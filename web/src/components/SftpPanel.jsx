@@ -13,9 +13,10 @@ import {
   CloudUpload,
   Eye,
   FileEdit,
+  FolderSync,
 } from 'lucide-react';
 import { api } from '../api';
-import { uploadToSession } from '../transfers';
+import { startUpload, uploadToSession } from '../transfers';
 import { useStore } from '../store';
 import FileEditor from './FileEditor';
 import Modal from './Modal';
@@ -39,6 +40,7 @@ export default function SftpPanel({ sessionId, label }) {
   const [error, setError] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [editPath, setEditPath] = useState(null);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [preview, setPreview] = useState(null); // {name, kind, content|url, size}
   const fileInput = useRef(null);
   const toast = useStore((s) => s.toast);
@@ -188,6 +190,9 @@ export default function SftpPanel({ sessionId, label }) {
         <span className="flex-1 font-mono text-[11px] text-zinc-400 truncate px-1" title={realPath}>
           {realPath || path}
         </span>
+        <button className="btn-ghost !p-1" title="Sync a folder (push local dir / pull remote as tar.gz)" onClick={() => setSyncOpen(true)}>
+          <FolderSync size={14} />
+        </button>
         <button className="btn-ghost !p-1" title="New folder" onClick={mkdir}>
           <FolderPlus size={14} />
         </button>
@@ -285,6 +290,16 @@ export default function SftpPanel({ sessionId, label }) {
         />
       )}
 
+      {syncOpen && (
+        <SyncModal
+          sessionId={sessionId}
+          remoteDir={realPath || path}
+          label={label}
+          onClose={() => setSyncOpen(false)}
+          onDone={() => load(realPath || path)}
+        />
+      )}
+
       {preview && (
         <Modal
           title={preview.name}
@@ -333,4 +348,161 @@ export default function SftpPanel({ sessionId, label }) {
 function joinPath(dir, name) {
   if (!dir || dir === '.') return name;
   return dir.endsWith('/') ? dir + name : `${dir}/${name}`;
+}
+
+// Folder sync — push: pick a local directory, diff it against the remote
+// (missing files or different size => upload). pull: remote dir comes back
+// as a streamed tar.gz the browser downloads.
+function SyncModal({ sessionId, remoteDir, label, onClose, onDone }) {
+  const { toast } = useStore();
+  const [mode, setMode] = useState('push');
+  const [localFiles, setLocalFiles] = useState(null); // FileList -> [{file, rel}]
+  const [remoteFiles, setRemoteFiles] = useState(null);
+  const [diff, setDiff] = useState(null); // {upload:[{file,rel}], skip:n}
+  const [busy, setBusy] = useState(false);
+  const dirInput = useRef(null);
+
+  const analyze = async (files) => {
+    setBusy(true);
+    try {
+      const r = await api(`/api/sftp/${sessionId}/rlist?path=${encodeURIComponent(remoteDir)}`);
+      const remote = new Map(r.files.map((f) => [f.path, f]));
+      setRemoteFiles(r.files);
+      // strip the picked dir's own name so 'site/index.html' -> 'index.html'
+      const items = files.map((f) => {
+        const rel = (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name;
+        return { file: f, rel };
+      });
+      const upload = [];
+      let skip = 0;
+      for (const it of items) {
+        const rem = remote.get(it.rel);
+        if (rem && rem.size === it.file.size) skip++;
+        else upload.push(it);
+      }
+      setLocalFiles(items);
+      setDiff({ upload, skip, truncated: r.truncated });
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const push = async () => {
+    if (!diff?.upload.length) return;
+    // create parent dirs level-by-level (mkdir fails harmlessly when it exists)
+    const dirs = new Set();
+    for (const it of diff.upload) {
+      const parts = it.rel.split('/').slice(0, -1);
+      for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+    }
+    for (const d of [...dirs].sort()) {
+      try {
+        await api(`/api/sftp/${sessionId}/mkdir`, {
+          method: 'POST',
+          body: { path: joinPath(remoteDir, d) },
+        });
+      } catch {}
+    }
+    for (const it of diff.upload) {
+      const dirPart = it.rel.split('/').slice(0, -1).join('/');
+      startUpload(sessionId, joinPath(remoteDir, dirPart), it.file, `${label} (sync)`);
+    }
+    toast(`syncing ${diff.upload.length} file(s) — see the transfer tray`, 'success');
+    onClose();
+    setTimeout(onDone, 1500);
+  };
+
+  const pull = () => {
+    const a = document.createElement('a');
+    a.href = `/api/sftp/${sessionId}/tar?path=${encodeURIComponent(remoteDir)}`;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast(`downloading ${remoteDir} as tar.gz`, 'success');
+    onClose();
+  };
+
+  return (
+    <Modal title={`Sync folder — ${remoteDir}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <button
+            className={`flex-1 rounded-md border px-3 py-2 text-sm ${
+              mode === 'push' ? 'border-emerald-700 bg-emerald-950/40 text-emerald-200' : 'border-ink-700 text-zinc-400'
+            }`}
+            onClick={() => setMode('push')}
+          >
+            Push — local → remote
+          </button>
+          <button
+            className={`flex-1 rounded-md border px-3 py-2 text-sm ${
+              mode === 'pull' ? 'border-emerald-700 bg-emerald-950/40 text-emerald-200' : 'border-ink-700 text-zinc-400'
+            }`}
+            onClick={() => setMode('pull')}
+          >
+            Pull — remote → tar.gz
+          </button>
+        </div>
+
+        {mode === 'push' && (
+          <div className="space-y-3">
+            <button className="btn-ghost border border-ink-700 w-full justify-center" onClick={() => dirInput.current?.click()}>
+              <Upload size={14} /> pick local folder
+            </button>
+            <input
+              ref={dirInput}
+              type="file"
+              className="hidden"
+              // nonstandard but supported by every modern browser
+              {...{ webkitdirectory: '', directory: '' }}
+              onChange={(e) => {
+                const files = [...e.target.files];
+                e.target.value = '';
+                if (files.length) analyze(files);
+              }}
+            />
+            {busy && <div className="text-xs text-zinc-500">scanning remote…</div>}
+            {diff && (
+              <>
+                <div className="rounded-md bg-ink-900 border border-ink-700 p-2.5 text-xs space-y-1">
+                  <div className="text-zinc-300">
+                    {diff.upload.length} file{diff.upload.length === 1 ? '' : 's'} to upload, {diff.skip} unchanged
+                    {diff.truncated && <span className="text-amber-400"> (remote listing truncated at 50k entries)</span>}
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-0.5">
+                    {diff.upload.slice(0, 100).map((it) => (
+                      <div key={it.rel} className="font-mono text-[10px] text-zinc-500 truncate">
+                        {remoteFiles?.some((r) => r.path === it.rel) ? '~' : '+'} {it.rel}
+                        <span className="text-zinc-700"> {fmtSize(it.file.size)}</span>
+                      </div>
+                    ))}
+                    {diff.upload.length > 100 && (
+                      <div className="text-[10px] text-zinc-600">…and {diff.upload.length - 100} more</div>
+                    )}
+                  </div>
+                </div>
+                <button className="btn-primary w-full justify-center" onClick={push} disabled={!diff.upload.length}>
+                  push {diff.upload.length} file{diff.upload.length === 1 ? '' : 's'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {mode === 'pull' && (
+          <div className="space-y-3">
+            <p className="text-xs text-zinc-400">
+              Streams <code className="font-mono">tar czf</code> on the remote — one download for the whole directory.
+            </p>
+            <button className="btn-primary w-full justify-center" onClick={pull}>
+              <Download size={14} /> download {remoteDir} as .tar.gz
+            </button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
 }

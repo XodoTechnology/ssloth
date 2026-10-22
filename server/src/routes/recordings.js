@@ -22,6 +22,39 @@ router.get('/', (req, res) => {
   });
 });
 
+// Search output text across this user's recordings — "which session ran X".
+// Casts are JSONL ([t,'o',data]); we scan the data payloads only.
+router.get('/search', (req, res) => {
+  const q = String(req.query.q || '').slice(0, 200);
+  if (!q) return res.status(400).json({ error: 'q required' });
+  const rows = db
+    .prepare('SELECT id, label, file, started_at, size FROM recordings WHERE user_id = ? ORDER BY id DESC LIMIT 200')
+    .all(req.user.id);
+  const needle = q.toLowerCase();
+  const hits = [];
+  for (const r of rows) {
+    const full = path.join(REC_DIR, path.basename(r.file));
+    if (!full.startsWith(REC_DIR) || !fs.existsSync(full)) continue;
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      let count = 0, firstTs = null;
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('[')) continue;
+        // cheap pre-filter before JSON.parse on every line
+        if (!line.toLowerCase().includes(needle)) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch { continue; }
+        if (ev[1] === 'o' && typeof ev[2] === 'string' && ev[2].toLowerCase().includes(needle)) {
+          count++;
+          if (firstTs === null) firstTs = ev[0];
+        }
+      }
+      if (count) hits.push({ id: r.id, label: r.label, started_at: r.started_at * 1000, hits: count, first_t: firstTs });
+    } catch {}
+  }
+  res.json({ query: q, results: hits });
+});
+
 // Raw cast content for the replay player / download.
 router.get('/:id/content', (req, res) => {
   const row = db.prepare('SELECT * FROM recordings WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);

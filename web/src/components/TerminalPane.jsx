@@ -221,7 +221,12 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     const term = termRef.current;
     setPaneState({ status: 'connecting', statusMsg: sessionRef.current ? 'reattaching…' : 'connecting…' });
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws/terminal`);
+    // Telnet hosts get the raw-TCP bridge — different backend, same terminal.
+    const targetHost = pane.target?.hostId
+      ? useStore.getState().hosts.find((h) => h.id === pane.target.hostId)
+      : null;
+    const wsPath = targetHost?.protocol === 'telnet' ? '/ws/telnet' : '/ws/terminal';
+    const ws = new WebSocket(`${proto}://${location.host}${wsPath}`);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     const seq = ++reconnectSeq.current;

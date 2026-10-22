@@ -42,6 +42,7 @@ function publicUser(u) {
     id: u.id,
     username: u.username,
     is_admin: !!u.is_admin,
+    role: u.role || (u.is_admin ? 'admin' : 'user'),
     totp_enabled: !!u.totp_enabled,
   };
 }
@@ -54,7 +55,7 @@ router.get('/state', (req, res) => {
   res.json({
     setup_required: userCount === 0,
     authenticated: !!user,
-    user: user ? { id: user.id, username: user.username, is_admin: user.is_admin, totp_enabled: user.totp_enabled } : null,
+    user: user ? publicUser(user) : null,
     desktop: DESKTOP,
     pin_set: DESKTOP && !!db.prepare('SELECT COUNT(*) AS c FROM users WHERE pin_hash IS NOT NULL').get().c,
   });

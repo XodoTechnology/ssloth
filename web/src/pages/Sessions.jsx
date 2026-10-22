@@ -15,6 +15,8 @@ import {
   Copy,
   Clock,
   Play,
+  Power,
+  Activity,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -32,14 +34,17 @@ const DOT_COLORS = {
 };
 
 export default function Sessions() {
-  const { hosts, tabs, activeTabId, openTab, closeTab, setActiveTab, refreshAll, toast, hostStatus, setHostStatus } =
+  const { hosts, tabs, activeTabId, openTab, closeTab, setActiveTab, refreshAll, toast, hostStatus, setHostStatus, user } =
     useStore();
+  const readOnly = user?.role === 'viewer';
   const [sidebar, setSidebar] = useState(true);
   const [query, setQuery] = useState('');
   const [quick, setQuick] = useState('');
   const [editing, setEditing] = useState(null); // host object | 'new' | null
   const [importing, setImporting] = useState(false);
   const [collapsed, setCollapsed] = useState({});
+  const [healthFor, setHealthFor] = useState(null); // hostId -> popover sparkline
+  const [healthData, setHealthData] = useState({});
 
   useEffect(() => {
     refreshAll(api).catch((e) => toast(e.message, 'error'));
@@ -124,6 +129,26 @@ export default function Sessions() {
     setQuick('');
   };
 
+  const wake = async (h, e) => {
+    e.stopPropagation();
+    try {
+      await api(`/api/hosts/${h.id}/wol`, { method: 'POST' });
+      toast(`magic packet sent to ${h.name}`, 'success');
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
+  const toggleHealth = async (h, e) => {
+    e.stopPropagation();
+    if (healthFor === h.id) return setHealthFor(null);
+    setHealthFor(h.id);
+    try {
+      const r = await api(`/api/hosts/${h.id}/health`);
+      setHealthData((d) => ({ ...d, [h.id]: r }));
+    } catch {}
+  };
+
   const togglePin = async (h) => {
     try {
       await api(`/api/hosts/${h.id}`, { method: 'PUT', body: { pinned: !h.pinned } });
@@ -156,13 +181,13 @@ export default function Sessions() {
   };
 
   const renderHost = (h) => (
+    <React.Fragment key={h.id}>
     <div
-      key={h.id}
       className="group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
       onClick={() => connectHost(h)}
       title={`${h.username}@${h.hostname}:${h.port}`}
     >
-      <span
+      <button
         className={`h-2 w-2 rounded-full shrink-0 ${DOT_COLORS[h.color] || 'bg-zinc-600'} ${
           hostStatus[h.id] === 'up'
             ? 'ring-2 ring-emerald-500/60'
@@ -172,15 +197,21 @@ export default function Sessions() {
         }`}
         title={
           hostStatus[h.id] === 'up'
-            ? 'reachable'
+            ? 'reachable — click for history'
             : hostStatus[h.id] === 'down'
-              ? 'unreachable'
-              : 'status unknown'
+              ? 'unreachable — click for history'
+              : 'status unknown — click for history'
         }
+        onClick={(e) => toggleHealth(h, e)}
       />
       <div className="min-w-0 flex-1">
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {h.name}
+          {h.protocol === 'telnet' && (
+            <span className="shrink-0 rounded bg-amber-950 px-1 py-px text-[9px] font-medium text-amber-300 uppercase">
+              telnet
+            </span>
+          )}
           {h.shared === 1 && (
             <span
               className="shrink-0 rounded bg-violet-950 px-1 py-px text-[9px] font-medium text-violet-300 uppercase"
@@ -218,7 +249,16 @@ export default function Sessions() {
         )}
       </div>
       <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-        {h.owned !== false && (
+        {h.mac && !readOnly && (
+          <button
+            className="p-1 text-zinc-500 hover:text-amber-400"
+            title={`Wake-on-LAN — send magic packet to ${h.mac}`}
+            onClick={(e) => wake(h, e)}
+          >
+            <Power size={13} />
+          </button>
+        )}
+        {h.owned !== false && !readOnly && (
           <>
             <button
               className={`p-1 ${h.pinned ? 'text-amber-400' : 'text-zinc-500 hover:text-amber-400'}`}
@@ -264,6 +304,21 @@ export default function Sessions() {
         )}
       </div>
     </div>
+    {healthFor === h.id && (
+      <div className="mx-2 mb-1 rounded-md border border-ink-700 bg-ink-900 px-3 py-2" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+          <Activity size={11} className="text-emerald-400" />
+          <span>reachability — last 48h</span>
+          <span className="ml-auto font-mono text-zinc-500">
+            {healthData[h.id]?.current
+              ? `${healthData[h.id].current.latencyMs}ms`
+              : '…'}
+          </span>
+        </div>
+        <HealthSpark rows={healthData[h.id]?.history || []} />
+      </div>
+    )}
+    </React.Fragment>
   );
 
   return (
@@ -292,9 +347,11 @@ export default function Sessions() {
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
-              <button className="btn-ghost !px-2 border border-ink-700" title="New host" onClick={() => setEditing('new')}>
-                <Plus size={14} />
-              </button>
+              {!readOnly && (
+                <button className="btn-ghost !px-2 border border-ink-700" title="New host" onClick={() => setEditing('new')}>
+                  <Plus size={14} />
+                </button>
+              )}
               <button
                 className="btn-ghost !px-2 border border-ink-700"
                 title="Import ~/.ssh/config"
@@ -435,6 +492,28 @@ export default function Sessions() {
         />
       )}
       {importing && <SshConfigImport onClose={() => setImporting(false)} />}
+    </div>
+  );
+}
+
+// Tiny uptime/latency sparkline: one column per probe, green when up,
+// red when down, height ~ latency (log-scaled, capped).
+function HealthSpark({ rows }) {
+  if (!rows.length) {
+    return <div className="py-3 text-center text-[10px] text-zinc-600">no probes yet — the sweeper runs every minute</div>;
+  }
+  const pts = [...rows].reverse().slice(-96);
+  const maxMs = Math.max(...pts.map((r) => r.latency_ms || 0), 1);
+  return (
+    <div className="flex items-end gap-px h-8 mt-1">
+      {pts.map((r, i) => (
+        <div
+          key={i}
+          title={`${new Date(r.ts).toLocaleTimeString()} — ${r.ok ? `${r.latency_ms}ms` : 'down'}`}
+          className={`flex-1 rounded-sm ${r.ok ? 'bg-emerald-600' : 'bg-red-600'}`}
+          style={{ height: r.ok ? `${Math.max(18, Math.round((Math.log2(1 + r.latency_ms) / Math.log2(1 + maxMs)) * 100))}%` : '100%' }}
+        />
+      ))}
     </div>
   );
 }

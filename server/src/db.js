@@ -165,6 +165,67 @@ ensureColumn('users', 'totp_pending_secret', 'totp_pending_secret TEXT');
 ensureColumn('users', 'totp_last_step', 'totp_last_step INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'shared', 'shared INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tunnels', 'type', "type TEXT NOT NULL DEFAULT 'local' CHECK (type IN ('local','dynamic'))");
+// --- round: importer/portal feature set ---
+ensureColumn('hosts', 'protocol', "protocol TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh','telnet'))");
+ensureColumn('hosts', 'mac', "mac TEXT NOT NULL DEFAULT ''");
+ensureColumn('hosts', 'agent_forward', 'agent_forward INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'role', "role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','viewer'))");
+db.exec("UPDATE users SET role = 'admin' WHERE is_admin = 1 AND role = 'user'");
+ensureColumn('playbooks', 'schedule_cron', 'schedule_cron TEXT');
+ensureColumn('playbooks', 'schedule_host_id', 'schedule_host_id INTEGER REFERENCES hosts(id) ON DELETE SET NULL');
+ensureColumn('playbooks', 'schedule_enabled', 'schedule_enabled INTEGER NOT NULL DEFAULT 0');
+ensureColumn('playbooks', 'next_run_at', 'next_run_at INTEGER');
+ensureColumn('playbooks', 'last_run_at', 'last_run_at INTEGER');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS playbook_runs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  playbook_id INTEGER,
+  host_id     INTEGER,
+  name        TEXT NOT NULL DEFAULT '',
+  host_label  TEXT NOT NULL DEFAULT '',
+  trigger     TEXT NOT NULL DEFAULT 'manual',
+  status      TEXT NOT NULL DEFAULT 'running'
+              CHECK (status IN ('running','ok','fail','timeout','aborted','error')),
+  output      TEXT NOT NULL DEFAULT '',
+  started_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+  ended_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_pruns_user ON playbook_runs(user_id, started_at);
+
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  scopes     TEXT NOT NULL DEFAULT '',
+  last_used  INTEGER,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_user ON api_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS host_health (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  host_id    INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ts         INTEGER NOT NULL DEFAULT (unixepoch()),
+  ok         INTEGER NOT NULL DEFAULT 0,
+  latency_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_health_host ON host_health(host_id, ts);
+
+CREATE TABLE IF NOT EXISTS webhooks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  events     TEXT NOT NULL DEFAULT '*',
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks(user_id);
+`);
 
 function audit(user, action, detail, req) {
   try {

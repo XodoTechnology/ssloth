@@ -198,7 +198,16 @@ function wsCollect(cookie, firstMsg, { until, timeoutMs = 20000, autoTrust = fal
 
   // ---------- shared flag is admin-only ----------
   const mate = ctx();
-  const mk = await admin.api('/api/admin/users', { method: 'POST', body: { username: 'secmate', password: 'matepass1234' } });
+  let mk = await admin.api('/api/admin/users', { method: 'POST', body: { username: 'secmate', password: 'matepass1234' } });
+  if (!mk.user?.id) {
+    // leftover from a previous run — delete and recreate so the password is known
+    const all = await admin.api('/api/admin/users');
+    const existing = (all.users || []).find((u) => u.username === 'secmate');
+    if (existing) {
+      await admin.api(`/api/admin/users/${existing.id}`, { method: 'DELETE' });
+      mk = await admin.api('/api/admin/users', { method: 'POST', body: { username: 'secmate', password: 'matepass1234' } });
+    }
+  }
   check('second user created', !!mk.user?.id);
   await mate.api('/api/auth/login', { method: 'POST', body: { username: 'secmate', password: 'matepass1234' } });
   const shareTry = await mate.api('/api/hosts', {

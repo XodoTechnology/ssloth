@@ -1,9 +1,11 @@
 'use strict';
 
 const crypto = require('crypto');
-const { Client } = require('ssh2');
+const { Client, utils } = require('ssh2');
+const { makeCertKey, enableCertAuth } = require('./certauth');
 const { db } = require('../db');
 const { decryptSecret, hostKeyFingerprint } = require('../crypto');
+const { agentForSpec } = require('./agent');
 
 // Live SSH sessions. A session owns one ssh2 Client; the terminal WebSocket
 // pipes a shell channel, the SFTP REST endpoints reuse the same connection,
@@ -85,6 +87,8 @@ function resolveConnectSpec(userId, input) {
     hostId: host.id,
     jumpHostId: host.jump_host_id || null,
     record: !!host.record,
+    protocol: host.protocol || 'ssh',
+    agentForward: !!host.agent_forward,
   };
 
   if (host.auth_type === 'credential' && host.credential_id) {
@@ -98,6 +102,7 @@ function resolveConnectSpec(userId, input) {
     if (cred.type === 'key') {
       spec.privateKey = secret.privateKey;
       spec.passphrase = secret.passphrase || undefined;
+      if (secret.certificate) spec.certificate = secret.certificate;
       if (!spec.username && cred.username) spec.username = cred.username;
     } else {
       spec.password = secret.password;
@@ -111,8 +116,37 @@ function resolveConnectSpec(userId, input) {
   return spec;
 }
 
-// Attempt one ssh2 connection. Resolves with a connected Client.
-// Rejects with err.code:
+// Certificate auth: ssh2 has no `certificate` connect option — cfg.privateKey
+// only accepts strings/Buffers and authPK cannot express the split
+// pkalg(cert type)/sigalg(plain type) wire format. makeCertKey wraps the
+// parsed private key so it presents the cert blob, and enableCertAuth patches
+// the connection's protocol so the signature field uses the right algorithm.
+function certAuth(spec) {
+  let key;
+  try {
+    key = utils.parseKey(spec.privateKey, spec.passphrase);
+    if (Array.isArray(key)) key = key[0];
+    if (!key || key instanceof Error) return {};
+    key = makeCertKey(key, spec.certificate);
+  } catch {
+    return {};
+  }
+  let triedCert = false, triedPassword = false;
+  return {
+    authHandler: (authsLeft, partial, next) => {
+      if (!triedCert) {
+        triedCert = true;
+        return next({ type: 'publickey', username: spec.username, key });
+      }
+      if (spec.password && !triedPassword) {
+        triedPassword = true;
+        return next({ type: 'password', username: spec.username, password: spec.password });
+      }
+      next(false);
+    },
+  };
+}
+
 // Parse the algorithm name ("ssh-ed25519", "ssh-rsa", ...) out of a raw
 // SSH wire-format public key blob.
 function keyAlgorithm(buf) {
@@ -196,6 +230,16 @@ function tryConnect(userId, spec, opts = {}) {
         readyTimeout: 20000,
         keepaliveInterval: (spec.keepalive ?? 15) * 1000,
         keepaliveCountMax: 3,
+        // Agent forwarding: a VaultAgent serving this host's stored keys so
+        // remote processes (git, nested ssh) can sign without seeing keys.
+        ...(spec.agentForward && spec.privateKey
+          ? { agent: agentForSpec(spec) || undefined, agentForward: !!agentForSpec(spec) }
+          : {}),
+        // Certificate auth: ssh2 has no cert option — wrap the parsed key so
+        // the cert blob is offered instead of the raw public key while the
+        // real private key still signs. Needs the authHandler to inject the
+        // mutated key object (cfg.privateKey only accepts strings).
+        ...(spec.certificate ? certAuth(spec) : {}),
         hostVerifier(key) {
           // ssh2 may pass the key as a Buffer or a base64 string.
           const buf = Buffer.isBuffer(key) ? key : Buffer.from(key, 'base64');
@@ -207,6 +251,9 @@ function tryConnect(userId, spec, opts = {}) {
           return !!stored && stored.key_b64 === keyB64;
         },
       });
+    // conn.connect() creates conn._protocol synchronously; patch authPK so a
+    // certificate credential is offered with the correct wire format.
+    if (spec.certificate) enableCertAuth(conn);
   });
 }
 

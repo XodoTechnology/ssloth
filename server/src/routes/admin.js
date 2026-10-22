@@ -30,29 +30,44 @@ const USERNAME_RE = /^[a-zA-Z0-9_.-]{2,32}$/;
 
 router.get('/users', requireAdmin, (req, res) => {
   const rows = db
-    .prepare('SELECT id, username, is_admin, totp_enabled, created_at FROM users ORDER BY username COLLATE NOCASE')
+    .prepare('SELECT id, username, is_admin, role, totp_enabled, created_at FROM users ORDER BY username COLLATE NOCASE')
     .all();
   res.json({ users: rows });
 });
 
+const VALID_ROLES = ['admin', 'user', 'viewer'];
+
 router.post('/users', requireAdmin, async (req, res) => {
-  const { username, password, is_admin } = req.body || {};
+  const { username, password, is_admin, role } = req.body || {};
   if (!USERNAME_RE.test(username || '')) {
     return res.status(400).json({ error: 'username must be 2-32 chars: letters, numbers, _ . -' });
   }
   if (typeof password !== 'string' || password.length < 10) {
     return res.status(400).json({ error: 'password must be at least 10 characters' });
   }
+  const userRole = is_admin ? 'admin' : VALID_ROLES.includes(role) ? role : 'user';
   try {
     const info = db
-      .prepare('INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)')
-      .run(username, await hashPassword(password), is_admin ? 1 : 0);
+      .prepare('INSERT INTO users (username, password_hash, is_admin, role) VALUES (?, ?, ?, ?)')
+      .run(username, await hashPassword(password), is_admin ? 1 : 0, userRole);
     auditReq(req, 'user.created', `user '${username}'`);
-    res.json({ user: { id: info.lastInsertRowid, username, is_admin: !!is_admin } });
+    res.json({ user: { id: info.lastInsertRowid, username, is_admin: !!is_admin, role: userRole } });
   } catch (e) {
     if (/UNIQUE/i.test(e.message)) return res.status(409).json({ error: 'username taken' });
     throw e;
   }
+});
+
+router.post('/users/:id/role', requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'not found' });
+  const { role } = req.body || {};
+  if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'role must be admin, user, or viewer' });
+  if (target.id === req.user.id) return res.status(400).json({ error: 'cannot change your own role' });
+  db.prepare('UPDATE users SET role = ?, is_admin = ? WHERE id = ?')
+    .run(role, role === 'admin' ? 1 : 0, target.id);
+  auditReq(req, 'user.role_changed', `user '${target.username}' -> ${role}`);
+  res.json({ ok: true });
 });
 
 router.post('/users/:id/password', requireAdmin, async (req, res) => {

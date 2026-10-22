@@ -33,7 +33,13 @@ const adminRoutes = require('./routes/admin');
 const recordingRoutes = require('./routes/recordings');
 const playbookRoutes = require('./routes/playbooks');
 const backupRoutes = require('./routes/backup');
+const webhookRoutes = require('./routes/webhooks');
+const tokenRoutes = require('./routes/tokens');
 const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./routes/shares');
+const { handleTelnetWs } = require('./ws/telnet');
+const { startScheduler } = require('./ssh/runner');
+const { startSweeper } = require('./health');
+const { requireWrite } = require('./auth');
 
 const app = express();
 app.disable('x-powered-by');
@@ -83,22 +89,26 @@ app.use(cookieParser());
 app.use(checkLoopbackHost);
 
 // SFTP streams raw bodies on upload, so it mounts before the JSON parser.
-app.use('/api/sftp', checkOrigin, requireAuth, sftpRoutes);
+app.use('/api/sftp', checkOrigin, requireAuth, requireWrite, sftpRoutes);
 
 // Vault export/import payloads (sealed secrets + hundreds of hosts) can
 // legitimately exceed the general 2MB cap.
 app.use('/api/vault', checkOrigin, express.json({ limit: '16mb' }));
 app.use('/api', checkOrigin, express.json({ limit: '2mb' }));
 app.use('/api/auth', authRoutes);
-app.use('/api/hosts', requireAuth, hostRoutes);
-app.use('/api/credentials', requireAuth, credentialRoutes);
-app.use('/api/snippets', requireAuth, snippetRoutes);
-app.use('/api/tunnels', requireAuth, tunnelRoutes);
-app.use('/api/shares', requireAuth, shareRoutes);
-app.use('/api/recordings', requireAuth, recordingRoutes);
-app.use('/api/playbooks', requireAuth, playbookRoutes);
-app.use('/api/vault', requireAuth, backupRoutes);
-app.use('/api/admin', requireAuth, adminRoutes);
+// 'viewer' role: read-only — requireWrite refuses their mutations (except
+// the auth self-service routes above: logout/password change stay allowed).
+app.use('/api/hosts', requireAuth, requireWrite, hostRoutes);
+app.use('/api/credentials', requireAuth, requireWrite, credentialRoutes);
+app.use('/api/snippets', requireAuth, requireWrite, snippetRoutes);
+app.use('/api/tunnels', requireAuth, requireWrite, tunnelRoutes);
+app.use('/api/shares', requireAuth, requireWrite, shareRoutes);
+app.use('/api/recordings', requireAuth, requireWrite, recordingRoutes);
+app.use('/api/playbooks', requireAuth, requireWrite, playbookRoutes);
+app.use('/api/vault', requireAuth, requireWrite, backupRoutes);
+app.use('/api/webhooks', requireAuth, requireWrite, webhookRoutes);
+app.use('/api/tokens', requireAuth, requireWrite, tokenRoutes);
+app.use('/api/admin', requireAuth, requireWrite, adminRoutes);
 // Public read-only metadata for share links (token in path is the credential).
 app.use('/api/public/share', sharePublicRoutes);
 
@@ -143,7 +153,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
   const shareMatch = url.pathname.match(/^\/ws\/share\/([A-Za-z0-9_-]{20,128})$/);
-  if (url.pathname !== '/ws/terminal' && !shareMatch) {
+  if (url.pathname !== '/ws/terminal' && url.pathname !== '/ws/telnet' && !shareMatch) {
     socket.destroy();
     return;
   }
@@ -170,9 +180,13 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
-    handleTerminalWs(ws, req, user);
+    if (url.pathname === '/ws/telnet') handleTelnetWs(ws, req, user);
+    else handleTerminalWs(ws, req, user);
   });
 });
+
+startScheduler();
+startSweeper();
 
 server.listen(PORT, BIND, () => {
   const addr = server.address();

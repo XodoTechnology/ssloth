@@ -20,6 +20,9 @@ export default function HostForm({ host, onClose, onSaved }) {
     hostname: host?.hostname || '',
     port: host?.port || 22,
     username: host?.username || '',
+    protocol: host?.protocol || 'ssh',
+    mac: host?.mac || '',
+    agent_forward: !!host?.agent_forward,
     auth_type: host?.auth_type || 'credential',
     credential_id: host?.credential_id || '',
     jump_host_id: host?.jump_host_id || '',
@@ -46,8 +49,11 @@ export default function HostForm({ host, onClose, onSaved }) {
       const body = {
         name: form.name,
         hostname: form.hostname,
-        port: parseInt(form.port, 10) || 22,
+        port: parseInt(form.port, 10) || (form.protocol === 'telnet' ? 23 : 22),
         username: form.username,
+        protocol: form.protocol,
+        mac: form.mac,
+        agent_forward: form.protocol === 'ssh' && !!form.agent_forward,
         auth_type: form.auth_type,
         credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
         jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
@@ -90,7 +96,25 @@ export default function HostForm({ host, onClose, onSaved }) {
           <label className="label">Hostname / IP</label>
           <input className="input font-mono" value={form.hostname} onChange={set('hostname')} placeholder="10.0.0.5" />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="label">Protocol</label>
+            <select
+              className="input"
+              value={form.protocol}
+              onChange={(e) => {
+                const p = e.target.value;
+                setForm((f) => ({
+                  ...f,
+                  protocol: p,
+                  port: !host && f.port === 22 && p === 'telnet' ? 23 : !host && f.port === 23 && p === 'ssh' ? 22 : f.port,
+                }));
+              }}
+            >
+              <option value="ssh">SSH</option>
+              <option value="telnet">Telnet</option>
+            </select>
+          </div>
           <div>
             <label className="label">Port</label>
             <input className="input font-mono" type="number" min="1" max="65535" value={form.port} onChange={set('port')} />
@@ -101,6 +125,26 @@ export default function HostForm({ host, onClose, onSaved }) {
           </div>
         </div>
 
+        {form.protocol === 'telnet' && (
+          <div className="col-span-2 rounded-md border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-300">
+            telnet is unencrypted — credentials and traffic cross the wire in cleartext. use only for
+            legacy gear (switches, UPSs, serial consoles) on trusted networks.
+          </div>
+        )}
+
+        <div>
+          <label className="label">MAC address <span className="text-zinc-600">(Wake-on-LAN)</span></label>
+          <input
+            className="input font-mono"
+            value={form.mac}
+            onChange={set('mac')}
+            placeholder="AA:BB:CC:DD:EE:FF"
+            maxLength={17}
+          />
+        </div>
+
+        {form.protocol === 'ssh' && (
+        <>
         <div>
           <label className="label">Authentication</label>
           <select className="input" value={form.auth_type} onChange={set('auth_type')}>
@@ -133,6 +177,8 @@ export default function HostForm({ host, onClose, onSaved }) {
             <p className="text-[11px] text-zinc-500 mt-6">password is prompted in the terminal and never stored</p>
           )}
         </div>
+        </>
+        )}
 
         <div>
           <label className="label">Folder / group</label>
@@ -171,6 +217,7 @@ export default function HostForm({ host, onClose, onSaved }) {
           </div>
         </div>
 
+        {form.protocol === 'ssh' && (
         <div>
           <label className="label">Bastion / jump host (optional)</label>
           <select className="input" value={form.jump_host_id} onChange={set('jump_host_id')}>
@@ -184,6 +231,7 @@ export default function HostForm({ host, onClose, onSaved }) {
               ))}
           </select>
         </div>
+        )}
         <div className="flex items-end pb-1 gap-5">
           <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer">
             <input
@@ -194,6 +242,20 @@ export default function HostForm({ host, onClose, onSaved }) {
             />
             auto-record sessions
           </label>
+          {form.protocol === 'ssh' && (
+          <label
+            className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer"
+            title="Remote commands can use this host's stored key to authenticate onward (like ssh -A) — keys never leave this server"
+          >
+            <input
+              type="checkbox"
+              className="accent-emerald-600"
+              checked={form.agent_forward}
+              onChange={(e) => setForm((f) => ({ ...f, agent_forward: e.target.checked }))}
+            />
+            agent forwarding
+          </label>
+          )}
           <label
             className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer"
             title="Other users on this ssloth instance can see and connect to this host — they can use its saved credential but never read it"

@@ -30,7 +30,7 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { name, type, username, password, privateKey, passphrase, comment } = req.body || {};
+  const { name, type, username, password, privateKey, passphrase, certificate, comment } = req.body || {};
   if (!name || String(name).trim().length === 0) return res.status(400).json({ error: 'name required' });
   if (!['password', 'key'].includes(type)) return res.status(400).json({ error: 'type must be password or key' });
 
@@ -49,7 +49,18 @@ router.post('/', (req, res) => {
         error: 'could not parse private key' + (passphrase ? ' (check passphrase)' : ''),
       });
     }
-    secret = { privateKey: String(privateKey), passphrase: passphrase ? String(passphrase) : null };
+    // OpenSSH user certificate (id-cert.pub line) — optional; enables
+    // CA-signed auth on servers trusting the CA.
+    let cert = null;
+    if (certificate) {
+      const parsed = ssh2.utils.parseKey(String(certificate));
+      const c = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!c || c instanceof Error || !/-cert-v0[01]@openssh\.com$/.test(c.type)) {
+        return res.status(400).json({ error: 'certificate is not a valid OpenSSH user certificate' });
+      }
+      cert = String(certificate).trim();
+    }
+    secret = { privateKey: String(privateKey), passphrase: passphrase ? String(passphrase) : null, certificate: cert };
   }
 
   const info = db
@@ -112,7 +123,7 @@ router.put('/:id', (req, res) => {
     .get(req.params.id, req.user.id);
   if (!cred) return res.status(404).json({ error: 'not found' });
 
-  const { name, username, comment, password, privateKey, passphrase } = req.body || {};
+  const { name, username, comment, password, privateKey, passphrase, certificate } = req.body || {};
   const updates = [];
   const params = [];
 
@@ -127,18 +138,31 @@ router.put('/:id', (req, res) => {
   if (cred.type === 'key' && privateKey) {
     try {
       const pub = publicKeyFor(privateKey, passphrase);
+      const { decryptSecret } = require('../crypto');
+      const prev = JSON.parse(decryptSecret(cred.secret_enc));
       updates.push('secret_enc = ?');
-      params.push(encryptSecret(JSON.stringify({ privateKey: String(privateKey), passphrase: passphrase ? String(passphrase) : null })));
+      params.push(encryptSecret(JSON.stringify({ privateKey: String(privateKey), passphrase: passphrase ? String(passphrase) : null, certificate: prev.certificate || null })));
       updates.push('public_key = ?');
       params.push(pub);
     } catch {
       return res.status(400).json({ error: 'could not parse private key' });
     }
-  } else if (cred.type === 'key' && passphrase !== undefined) {
-    // Update only the passphrase on the existing key.
+  } else if (cred.type === 'key' && (passphrase !== undefined || certificate !== undefined)) {
+    // Update passphrase and/or certificate on the existing key.
     const { decryptSecret } = require('../crypto');
     const secret = JSON.parse(decryptSecret(cred.secret_enc));
-    secret.passphrase = passphrase ? String(passphrase) : null;
+    if (passphrase !== undefined) secret.passphrase = passphrase ? String(passphrase) : null;
+    if (certificate !== undefined) {
+      if (!certificate) secret.certificate = null;
+      else {
+        const parsed = ssh2.utils.parseKey(String(certificate));
+        const c = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (!c || c instanceof Error || !/-cert-v0[01]@openssh\.com$/.test(c.type)) {
+          return res.status(400).json({ error: 'certificate is not a valid OpenSSH user certificate' });
+        }
+        secret.certificate = String(certificate).trim();
+      }
+    }
     updates.push('secret_enc = ?');
     params.push(encryptSecret(JSON.stringify(secret)));
   }

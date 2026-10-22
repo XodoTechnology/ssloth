@@ -5,7 +5,8 @@ import { useStore } from '../store';
 import Modal from '../components/Modal';
 
 export default function Vault() {
-  const { credentials, refreshAll, toast } = useStore();
+  const { credentials, refreshAll, toast, user } = useStore();
+  const readOnly = user?.role === 'viewer';
   const [modal, setModal] = useState(null); // 'password' | 'key' | 'generate' | cred object
   const [viewKey, setViewKey] = useState(null); // credential with public key shown
 
@@ -47,15 +48,19 @@ export default function Vault() {
             <KeyRound size={18} className="text-emerald-400" /> Credential vault
           </h1>
           <div className="flex gap-2">
-            <button className="btn-ghost border border-ink-700" onClick={() => setModal('generate')}>
-              <Sparkles size={14} /> Generate key
-            </button>
-            <button className="btn-ghost border border-ink-700" onClick={() => setModal('key')}>
-              <KeyRound size={14} /> Import key
-            </button>
-            <button className="btn-primary" onClick={() => setModal('password')}>
-              <Plus size={14} /> Password
-            </button>
+            {!readOnly && (
+              <>
+                <button className="btn-ghost border border-ink-700" onClick={() => setModal('generate')}>
+                  <Sparkles size={14} /> Generate key
+                </button>
+                <button className="btn-ghost border border-ink-700" onClick={() => setModal('key')}>
+                  <KeyRound size={14} /> Import key
+                </button>
+                <button className="btn-primary" onClick={() => setModal('password')}>
+                  <Plus size={14} /> Password
+                </button>
+              </>
+            )}
           </div>
         </div>
         <p className="text-xs text-zinc-500">
@@ -81,12 +86,16 @@ export default function Vault() {
                   <Eye size={13} /> pubkey
                 </button>
               )}
-              <button className="btn-ghost !py-1 text-xs" onClick={() => setModal(c)}>
-                <Pencil size={13} />
-              </button>
-              <button className="btn-ghost !py-1 text-xs hover:text-red-400" onClick={() => del(c)}>
-                <Trash2 size={13} />
-              </button>
+              {!readOnly && (
+                <>
+                  <button className="btn-ghost !py-1 text-xs" onClick={() => setModal(c)}>
+                    <Pencil size={13} />
+                  </button>
+                  <button className="btn-ghost !py-1 text-xs hover:text-red-400" onClick={() => del(c)}>
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
           {credentials.length === 0 && (
@@ -130,6 +139,7 @@ function CredentialModal({ mode, onClose }) {
     password: '',
     privateKey: '',
     passphrase: '',
+    certificate: '',
     keyType: 'ed25519',
     bits: 3072,
   });
@@ -150,6 +160,7 @@ function CredentialModal({ mode, onClose }) {
         if (editing.type === 'key') {
           if (form.privateKey) body.privateKey = form.privateKey;
           if (form.passphrase !== '') body.passphrase = form.passphrase;
+          if (form.certificate !== '') body.certificate = form.certificate === '-' ? '' : form.certificate;
         }
         await api(`/api/credentials/${editing.id}`, { method: 'PUT', body });
         toast('credential updated', 'success');
@@ -181,6 +192,7 @@ function CredentialModal({ mode, onClose }) {
                   username: form.username || undefined,
                   privateKey: form.privateKey,
                   passphrase: form.passphrase || undefined,
+                  certificate: form.certificate || undefined,
                   comment: form.comment,
                 },
         });
@@ -263,6 +275,27 @@ function CredentialModal({ mode, onClose }) {
               value={form.privateKey}
               onChange={set('privateKey')}
             />
+          </div>
+        )}
+
+        {type === 'key' && !isGenerate && (
+          <div className="col-span-2">
+            <label className="label">
+              User certificate (optional){' '}
+              {editing && <span className="text-zinc-600">— blank keeps existing; enter "-" to remove</span>}
+            </label>
+            <textarea
+              className="input font-mono !text-[11px]"
+              rows="2"
+              spellCheck="false"
+              placeholder="ssh-ed25519-cert-v01@openssh.com AAAA… (the *-cert.pub file from ssh-keygen -s)"
+              value={form.certificate}
+              onChange={set('certificate')}
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">
+              OpenSSH CA-signed certificate — auth presents the cert while the private key signs. Servers must
+              trust the CA (TrustedUserCAKeys).
+            </p>
           </div>
         )}
 
