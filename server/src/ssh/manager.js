@@ -11,10 +11,14 @@ const { decryptSecret, hostKeyFingerprint } = require('../crypto');
 const sessions = new Map(); // sessionId -> session
 
 const IDLE_TTL_MS = 60 * 60 * 1000;
+const DETACHED_TTL_MS = 60 * 60 * 1000; // detached sessions die even if output is noisy
+const MAX_SESSIONS_PER_USER = 25;
 setInterval(() => {
   const now = Date.now();
   for (const [id, s] of sessions) {
-    if (now - s.lastUsed > IDLE_TTL_MS) destroySession(id);
+    const abandoned =
+      !s.ws && s.viewers.size === 0 && s.detachedAt && now - s.detachedAt > DETACHED_TTL_MS;
+    if (abandoned || now - s.lastUsed > IDLE_TTL_MS) destroySession(id);
   }
 }, 5 * 60 * 1000).unref();
 
@@ -285,6 +289,12 @@ async function establishConn(userId, spec, opts = {}) {
 // buffering in `replay` for reattach. Only an explicit close (or the idle
 // sweep, conn death) destroys the session.
 function createSession(userId, conn, spec) {
+  let mine = 0;
+  for (const s of sessions.values()) if (s.userId === userId) mine++;
+  if (mine >= MAX_SESSIONS_PER_USER) {
+    try { conn.end(); } catch {}
+    throw Object.assign(new Error(`session limit reached (${MAX_SESSIONS_PER_USER} per user)`), { code: 'error' });
+  }
   const id = crypto.randomBytes(16).toString('hex');
   const session = {
     id,
@@ -302,6 +312,7 @@ function createSession(userId, conn, spec) {
     playbook: null, // { steps, idx, buf, marker, send }
     createdAt: Date.now(),
     lastUsed: Date.now(),
+    detachedAt: null, // set while no owner ws is attached
   };
   sessions.set(id, session);
   conn.on('error', () => {}); // 'close' follows; prevents unhandled-error crash
@@ -331,7 +342,9 @@ const REPLAY_CAP = 1024 * 1024;
 // viewers, the asciinema recorder, and the capped replay buffer that powers
 // late-joining viewers *and* reattach scrollback.
 function sessionOutput(session, chunk) {
-  session.lastUsed = Date.now(); // live output = activity, don't idle-sweep
+  // Only consumers count as activity — a detached `top` session must still
+  // hit the detached-session TTL rather than churning forever.
+  if (session.ws || session.viewers.size > 0) session.lastUsed = Date.now();
   session.replay =
     session.replay.length + chunk.length > REPLAY_CAP
       ? Buffer.concat([session.replay.subarray(-REPLAY_CAP / 2), chunk])
@@ -352,14 +365,18 @@ function sessionOutput(session, chunk) {
 function attachWs(session, ws) {
   session.ws = ws;
   session.lastUsed = Date.now();
+  session.detachedAt = null;
 }
 
 function detachWs(session) {
-  if (session) session.ws = null;
+  if (session) {
+    session.ws = null;
+    if (!session.detachedAt) session.detachedAt = Date.now();
+  }
 }
 
-function attachViewer(session, ws, mode) {
-  session.viewers.set(ws, { mode });
+function attachViewer(session, ws, mode, shareId) {
+  session.viewers.set(ws, { mode, shareId });
   session.lastUsed = Date.now();
   if (session.replay.length) {
     try {
@@ -370,6 +387,20 @@ function attachViewer(session, ws, mode) {
 
 function detachViewer(session, ws) {
   session.viewers.delete(ws);
+}
+
+// Revoking a share link must kill any viewers that got in through it —
+// they were admitted on the token's say-so, which no longer exists.
+function closeViewersByShare(shareId) {
+  for (const s of sessions.values()) {
+    for (const [vws, meta] of s.viewers) {
+      if (meta.shareId === shareId) {
+        try { vws.send(JSON.stringify({ type: 'status', state: 'closed', message: 'share link revoked' })); } catch {}
+        try { vws.close(); } catch {}
+        s.viewers.delete(vws);
+      }
+    }
+  }
 }
 
 function getSession(userId, sessionId) {
@@ -432,8 +463,25 @@ function destroySession(sessionId) {
   sessions.delete(sessionId);
   if (s.healthTimer) clearInterval(s.healthTimer);
   if (s.recorder) finalizeRecorder(s);
+  try { s.ws?.send(JSON.stringify({ type: 'status', state: 'closed', message: 'session closed' })); } catch {}
   try { s.ws?.close(); } catch {}
+  // Kill share viewers + their tokens too — a destroyed session's share links
+  // must never resolve again (they'd hang waiting on a dead session_id).
+  for (const viewerWs of s.viewers.keys()) {
+    try { viewerWs.send(JSON.stringify({ type: 'status', state: 'closed', message: 'session ended by owner' })); } catch {}
+    try { viewerWs.close(); } catch {}
+  }
+  s.viewers.clear();
+  try { db.prepare('DELETE FROM shares WHERE session_id = ?').run(sessionId); } catch {}
   try { s.conn.end(); } catch {}
+}
+
+// Tear down every live session a user owns — used on logout, password
+// change/reset and account deletion so no channel outlives its auth.
+function destroyUserSessions(userId) {
+  for (const s of [...sessions.values()]) {
+    if (s.userId === userId) destroySession(s.id);
+  }
 }
 
 // Flush a session's cast recorder and mark the recordings row complete.
@@ -457,12 +505,14 @@ module.exports = {
   getSession,
   getSftp,
   destroySession,
+  destroyUserSessions,
   sessionOutput,
   attachWs,
   detachWs,
   probeHealth,
   attachViewer,
   detachViewer,
+  closeViewersByShare,
   finalizeRecorder,
   trustHostKey,
   listHostKeys,

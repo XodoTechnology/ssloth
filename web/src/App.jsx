@@ -5,6 +5,7 @@ import { useStore } from './store';
 import Layout from './components/Layout';
 import Toasts from './components/Toasts';
 import IdleLock from './components/IdleLock';
+import SnippetVarPrompt from './components/SnippetVarPrompt';
 import Login from './pages/Login';
 import Sessions from './pages/Sessions';
 import Vault from './pages/Vault';
@@ -85,6 +86,7 @@ export default function App() {
         </Route>
       </Routes>
       <IdleLock />
+      <SnippetVarPrompt />
       <Toasts />
     </>
   );

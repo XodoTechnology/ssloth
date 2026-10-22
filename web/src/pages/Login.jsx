@@ -26,9 +26,12 @@ function PinPad({ onUnlock }) {
   };
 
   const tap = (d) => {
-    const next = (pin + d).slice(0, 8);
+    if (busy || pin.length >= 8) return;
+    const next = pin + d;
     setPin(next);
-    if (next.length >= 4) unlock(next);
+    // Auto-submit only at the max length — firing at 4 would make longer
+    // PINs impossible to type (the 4-digit prefix gets rejected first).
+    if (next.length === 8) unlock(next);
   };
 
   return (
@@ -60,7 +63,14 @@ function PinPad({ onUnlock }) {
             {d}
           </button>
         ))}
-        <span />
+        <button
+          type="button"
+          onClick={() => unlock(pin)}
+          disabled={pin.length < 4 || busy}
+          className="h-12 rounded-md bg-emerald-900/60 text-emerald-300 hover:bg-emerald-800/60 disabled:opacity-40 flex items-center justify-center"
+        >
+          ✓
+        </button>
         <button
           type="button"
           onClick={() => tap(0)}
@@ -76,7 +86,7 @@ function PinPad({ onUnlock }) {
           <Delete size={18} />
         </button>
       </div>
-      <p className="text-center text-[11px] text-zinc-600">auto-unlocks at 4+ digits</p>
+      <p className="text-center text-[11px] text-zinc-600">4–8 digits — press ✓ (or it submits at 8)</p>
     </div>
   );
 }

@@ -36,6 +36,7 @@ async function requireSftp(req, res) {
 const pReaddir = (sftp, p) => new Promise((res, rej) => sftp.readdir(p, (e, l) => (e ? rej(e) : res(l))));
 const pRealpath = (sftp, p) => new Promise((res, rej) => sftp.realpath(p, (e, r) => (e ? rej(e) : res(r))));
 const pStat = (sftp, p) => new Promise((res, rej) => sftp.stat(p, (e, s) => (e ? rej(e) : res(s))));
+const pLstat = (sftp, p) => new Promise((res, rej) => sftp.lstat(p, (e, s) => (e ? rej(e) : res(s))));
 const pMkdir = (sftp, p) => new Promise((res, rej) => sftp.mkdir(p, (e) => (e ? rej(e) : res())));
 const pRename = (sftp, a, b) => new Promise((res, rej) => sftp.rename(a, b, (e) => (e ? rej(e) : res())));
 const pUnlink = (sftp, p) => new Promise((res, rej) => sftp.unlink(p, (e) => (e ? rej(e) : res())));
@@ -159,6 +160,11 @@ router.get('/:sid/download', async (req, res) => {
       if (!res.headersSent) sftpError(res, e, 'download failed');
       else res.destroy(e);
     });
+    // Client aborting mid-download must kill the sftp read stream — otherwise
+    // the channel (and its window/buffers) leaks until the connection dies.
+    res.on('close', () => {
+      if (!res.writableEnded) rs.destroy();
+    });
     rs.pipe(res);
     auditReq(req, 'sftp.download', `${ctx.session.label}:${p}`);
   } catch (e) {
@@ -167,6 +173,7 @@ router.get('/:sid/download', async (req, res) => {
 });
 
 // Stream a file upload: raw request body -> remote file.
+const UPLOAD_CAP = 2 * 1024 * 1024 * 1024; // 2GB per file
 router.post('/:sid/upload', async (req, res) => {
   const ctx = await requireSftp(req, res);
   if (!ctx) return;
@@ -178,14 +185,25 @@ router.post('/:sid/upload', async (req, res) => {
   try {
     const ws = ctx.sftp.createWriteStream(full);
     await new Promise((resolve, reject) => {
+      let received = 0;
       ws.on('error', reject);
       req.on('error', reject);
       ws.on('close', resolve);
+      req.on('data', (chunk) => {
+        received += chunk.length;
+        if (received > UPLOAD_CAP) {
+          req.unpipe(ws);
+          ws.destroy();
+          reject(Object.assign(new Error('file too large'), { code: 'too_large' }));
+          req.resume(); // drain the rest so the socket stays clean
+        }
+      });
       req.pipe(ws);
     });
     auditReq(req, 'sftp.upload', `${ctx.session.label}:${full}`);
     res.json({ ok: true, path: full });
   } catch (e) {
+    if (e?.code === 'too_large') return res.status(413).json({ error: 'file exceeds 2GB upload limit' });
     sftpError(res, e, 'upload failed');
   }
 });
@@ -226,7 +244,7 @@ router.post('/:sid/delete', json, async (req, res) => {
     if (req.body?.recursive) {
       await rmrf(ctx.sftp, p, 0);
     } else {
-      const st = await pStat(ctx.sftp, p);
+      const st = await pLstat(ctx.sftp, p);
       if ((st.mode & S_IFMT) === S_IFDIR) await pRmdir(ctx.sftp, p);
       else await pUnlink(ctx.sftp, p);
     }
@@ -236,9 +254,11 @@ router.post('/:sid/delete', json, async (req, res) => {
   }
 });
 
+// lstat (not stat): a symlink inside the tree must be unlinked as a link —
+// stat() would follow it into the target directory and delete its contents.
 async function rmrf(sftp, p, depth) {
   if (depth > 32) throw new Error('directory too deep to delete recursively');
-  const st = await pStat(sftp, p);
+  const st = await pLstat(sftp, p);
   if ((st.mode & S_IFMT) !== S_IFDIR) return pUnlink(sftp, p);
   const list = await pReaddir(sftp, p);
   for (const e of list) {

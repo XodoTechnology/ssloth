@@ -30,8 +30,6 @@ export default function TerminalView({ tab, active }) {
   const [showShare, setShowShare] = useState(false);
   const [showPlaybooks, setShowPlaybooks] = useState(false);
   const [splitPicker, setSplitPicker] = useState(false);
-  const [varPrompt, setVarPrompt] = useState(null); // {snippet, vars, execute}
-  const [varValues, setVarValues] = useState({});
 
   const snippets = useStore((s) => s.snippets);
   const playbooks = useStore((s) => s.playbooks);
@@ -41,7 +39,6 @@ export default function TerminalView({ tab, active }) {
   const setActivePane = useStore((s) => s.setActivePane);
   const toggleBroadcast = useStore((s) => s.toggleBroadcast);
   const broadcastTabId = useStore((s) => s.broadcastTabId);
-  const sendToTab = useStore((s) => s.sendToTab);
   const activeSender = useStore((s) => s.activeSender);
   const toast = useStore((s) => s.toast);
   const paneStates = useStore((s) => s.paneStates);
@@ -70,28 +67,8 @@ export default function TerminalView({ tab, active }) {
 
   const runSnippet = (snip, execute) => {
     setShowSnippets(false);
-    const vars = [...new Set([...snip.command.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)].map((m) => m[1]))];
-    if (vars.length) {
-      setVarValues({});
-      setVarPrompt({ snippet: snip, vars, execute });
-      return;
-    }
-    sendCommand(snip.command, execute);
-  };
-
-  const sendCommand = (command, execute) => {
-    if (status !== 'ready') return toast('session not connected', 'error');
-    sendToTab(tab.id, command + (execute ? '\n' : ''));
-  };
-
-  const submitVars = (e) => {
-    e.preventDefault();
-    let cmd = varPrompt.snippet.command;
-    for (const [k, v] of Object.entries(varValues)) {
-      cmd = cmd.replaceAll(new RegExp(`\\{\\{\\s*${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g'), v);
-    }
-    sendCommand(cmd, varPrompt.execute);
-    setVarPrompt(null);
+    // shared runner — prompts for {{vars}} via the global store modal
+    useStore.getState().runSnippet(snip, { tabId: tab.id, execute });
   };
 
   const addPane = (target) => {
@@ -100,7 +77,18 @@ export default function TerminalView({ tab, active }) {
   };
 
   const removePane = (paneId) => {
-    setPanes((p) => p.filter((x) => x.id !== paneId));
+    // Kill the pane's SSH session explicitly — unmounting alone only
+    // detaches, leaving a live (and forgotten) server-side session.
+    const st = useStore.getState();
+    try { st.paneSenders[`${tab.id}:${paneId}`]?.closeSession?.(); } catch {}
+    st.unregisterPane(tab.id, paneId);
+    setPanes((p) => {
+      const next = p.filter((x) => x.id !== paneId);
+      if (useStore.getState().activePane[tab.id] === paneId && next.length) {
+        useStore.getState().setActivePane(tab.id, next[0].id);
+      }
+      return next;
+    });
   };
 
   const toggleRecord = () => {
@@ -397,29 +385,6 @@ export default function TerminalView({ tab, active }) {
         </Modal>
       )}
 
-      {varPrompt && (
-        <Modal title={`Fill: ${varPrompt.snippet.name}`} onClose={() => setVarPrompt(null)}>
-          <form onSubmit={submitVars} className="space-y-3">
-            {varPrompt.vars.map((v) => (
-              <div key={v}>
-                <label className="label font-mono">{`{{${v}}}`}</label>
-                <input
-                  className="input font-mono"
-                  autoFocus={v === varPrompt.vars[0]}
-                  value={varValues[v] || ''}
-                  onChange={(e) => setVarValues((s) => ({ ...s, [v]: e.target.value }))}
-                />
-              </div>
-            ))}
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setVarPrompt(null)}>
-                Cancel
-              </button>
-              <button className="btn-primary">{varPrompt.execute ? 'Run' : 'Insert'}</button>
-            </div>
-          </form>
-        </Modal>
-      )}
     </div>
   );
 }

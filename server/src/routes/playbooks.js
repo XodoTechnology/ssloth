@@ -23,6 +23,7 @@ function cleanPlaybook(body, { partial = false } = {}) {
       .map((s) => ({
         command: String(s?.command ?? '').slice(0, 4000),
         description: String(s?.description ?? '').slice(0, 200),
+        timeout_s: Math.min(Math.max(parseInt(s?.timeout_s, 10) || 60, 5), 3600),
       }))
       .filter((s) => s.command.trim());
     out.steps = JSON.stringify(steps);

@@ -161,6 +161,8 @@ ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');
 ensureColumn('hosts', 'region', "region TEXT NOT NULL DEFAULT ''");
 ensureColumn('hosts', 'tags', "tags TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', 'pin_hash', 'pin_hash TEXT');
+ensureColumn('users', 'totp_pending_secret', 'totp_pending_secret TEXT');
+ensureColumn('users', 'totp_last_step', 'totp_last_step INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'shared', 'shared INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tunnels', 'type', "type TEXT NOT NULL DEFAULT 'local' CHECK (type IN ('local','dynamic'))");
 

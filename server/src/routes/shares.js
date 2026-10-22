@@ -4,7 +4,7 @@ const express = require('express');
 const { db } = require('../db');
 const { randomToken, sha256B64 } = require('../crypto');
 const { auditReq } = require('../auth');
-const { sessions } = require('../ssh/manager');
+const { sessions, closeViewersByShare } = require('../ssh/manager');
 
 const router = express.Router();
 const publicRouter = express.Router();
@@ -54,6 +54,7 @@ router.delete('/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM shares WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   db.prepare('DELETE FROM shares WHERE id = ?').run(row.id);
+  closeViewersByShare(row.id);
   auditReq(req, 'share.revoked', `share of '${row.label}'`);
   res.json({ ok: true });
 });

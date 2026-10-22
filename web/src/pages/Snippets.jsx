@@ -5,7 +5,7 @@ import { useStore } from '../store';
 import Modal from '../components/Modal';
 
 export default function Snippets() {
-  const { snippets, refreshAll, toast, tabs, activeTabId, sendToTab } = useStore();
+  const { snippets, refreshAll, toast, activeTabId } = useStore();
   const [editing, setEditing] = useState(null); // 'new' | snippet | null
   const [query, setQuery] = useState('');
 
@@ -43,8 +43,8 @@ export default function Snippets() {
 
   const runHere = (s, execute) => {
     if (!activeTabId) return toast('open a session tab first', 'error');
-    sendToTab(activeTabId, s.command + (execute ? '\n' : ''));
-    toast(execute ? `ran "${s.name}"` : `inserted "${s.name}"`, 'success');
+    // shared runner — prompts for {{vars}} via the global modal
+    useStore.getState().runSnippet(s, { tabId: activeTabId, execute });
   };
 
   return (

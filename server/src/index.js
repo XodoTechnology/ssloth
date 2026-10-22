@@ -18,6 +18,7 @@ const {
   requireAuth,
   checkOrigin,
   checkWsOrigin,
+  checkLoopbackHost,
 } = require('./auth');
 const { handleTerminalWs } = require('./ws/terminal');
 const { handleShareWs } = require('./ws/share');
@@ -77,9 +78,16 @@ app.use(
 
 app.use(cookieParser());
 
+// Desktop mode is loopback-only — reject foreign Host headers early so a
+// DNS-rebinding domain can't reach the API or WS at all.
+app.use(checkLoopbackHost);
+
 // SFTP streams raw bodies on upload, so it mounts before the JSON parser.
 app.use('/api/sftp', checkOrigin, requireAuth, sftpRoutes);
 
+// Vault export/import payloads (sealed secrets + hundreds of hosts) can
+// legitimately exceed the general 2MB cap.
+app.use('/api/vault', checkOrigin, express.json({ limit: '16mb' }));
 app.use('/api', checkOrigin, express.json({ limit: '2mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/hosts', requireAuth, hostRoutes);

@@ -8,7 +8,7 @@ const ICONS = { host: Server, snippet: Zap, nav: Terminal };
 export default function CommandPalette() {
   const open = useStore((s) => s.paletteOpen);
   const setOpen = useStore((s) => s.setPaletteOpen);
-  const { hosts, snippets, openTab, activeTabId, sendToTab, toast } = useStore();
+  const { hosts, snippets, openTab, activeTabId, toast } = useStore();
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const inputRef = useRef(null);
@@ -53,9 +53,8 @@ export default function CommandPalette() {
         hint: s.command.slice(0, 60),
         hay: `${s.name} ${s.command} ${s.category}`,
         run: () => {
-          if (!activeTabId) return toast('open a session first', 'error');
-          sendToTab(activeTabId, s.command + '\n');
-          toast(`ran "${s.name}"`, 'success');
+          // shared runner — prompts for {{vars}} via the global modal
+          useStore.getState().runSnippet(s, { tabId: activeTabId, execute: true });
         },
       });
     }
@@ -71,7 +70,7 @@ export default function CommandPalette() {
       list.push({ kind: 'nav', icon: ICONS.nav, label, hint: path, hay: label, run: () => navigate(path) });
     }
     return list;
-  }, [hosts, snippets, openTab, activeTabId, sendToTab, navigate, toast]);
+  }, [hosts, snippets, openTab, activeTabId, navigate, toast]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();

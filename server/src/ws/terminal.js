@@ -1,6 +1,5 @@
 'use strict';
 
-const crypto = require('crypto');
 const { db, audit } = require('../db');
 const { CastRecorder } = require('../ssh/recorder');
 const {
@@ -153,7 +152,10 @@ function handleTerminalWs(ws, req, user) {
 
       case 'playbook_stop':
         if (session?.playbook) {
+          const pb = session.playbook;
           session.playbook = null;
+          if (pb.timer) clearTimeout(pb.timer);
+          try { pb.chan?.close(); } catch {}
           send({ type: 'playbook_done', ok: false, aborted: true });
         }
         break;
@@ -264,7 +266,6 @@ function handleTerminalWs(ws, req, user) {
         send({ type: 'ready', sessionId: sess.id, label: spec.label });
         if (spec.record) startRecording();
         const onOut = (chunk) => {
-          scanPlaybook(sess, chunk);
           sessionOutput(sess, chunk);
         };
         s.on('data', onOut);
@@ -277,9 +278,10 @@ function handleTerminalWs(ws, req, user) {
     );
   }
 
-  // ---- Playbooks: run steps sequentially, detect each step's exit code via
-  // a unique marker echo. Output (including the marker line) still streams
-  // to the terminal so progress is visible.
+  // ---- Playbooks: each step runs on its own exec channel — real exit
+  // codes from the channel close event (no marker-echo parsing, works on
+  // non-POSIX shells), per-step timeout, and step output streams into the
+  // terminal via sessionOutput so progress stays visible + recorded.
   function startPlaybook(playbookId) {
     const pb = db
       .prepare('SELECT * FROM playbooks WHERE id = ? AND user_id = ?')
@@ -296,19 +298,22 @@ function handleTerminalWs(ws, req, user) {
     session.playbook = {
       steps,
       idx: 0,
-      buf: '',
-      rand: crypto.randomBytes(4).toString('hex'),
       name: pb.name,
+      chan: null,
+      timer: null,
+      stepDone: false,
     };
     audit(user, 'playbook.run', `${pb.name} on ${session.label}`, req);
     runPlaybookStep(session);
   }
 
-  // NOTE: takes the session object, not the ws-scoped `session` — this runs
-  // from the stream data handler which outlives whichever socket attached.
+  // NOTE: takes the session object, not the ws-scoped `session` — channel
+  // callbacks outlive whichever socket is attached.
   function runPlaybookStep(sess) {
     const pb = sess.playbook;
+    if (!pb) return;
     const step = pb.steps[pb.idx];
+    const timeoutMs = Math.min(Math.max(parseInt(step.timeout_s, 10) || 60, 5), 3600) * 1000;
     sendToSession(sess, {
       type: 'playbook_step',
       index: pb.idx,
@@ -317,38 +322,53 @@ function handleTerminalWs(ws, req, user) {
       command: step.command,
       name: pb.name,
     });
-    sess.stream.write(`${step.command}\necho "__SSLPB_${pb.idx}_${pb.rand}_$?__"\n`);
-  }
+    // Echo the command into the terminal (steps run on a side channel — the
+    // interactive shell never sees them).
+    sessionOutput(sess, Buffer.from(`\r\n\x1b[36m$ ${step.command}\x1b[0m\r\n`));
 
-  function scanPlaybook(sess, chunk) {
-    const pb = sess.playbook;
-    if (!pb) return;
-    pb.buf = (pb.buf + chunk.toString('utf8')).slice(-8192);
-    const m = pb.buf.match(new RegExp(`__SSLPB_${pb.idx}_${pb.rand}_(\\d+)__`));
-    if (!m) return;
-    const exitCode = parseInt(m[1], 10);
-    sendToSession(sess, {
-      type: 'playbook_step',
-      index: pb.idx,
-      total: pb.steps.length,
-      status: exitCode === 0 ? 'ok' : 'fail',
-      exitCode,
-      command: pb.steps[pb.idx].command,
+    const finishStep = (status, exitCode, timedOut) => {
+      if (sess.playbook !== pb || pb.stepDone) return;
+      pb.stepDone = true;
+      if (pb.timer) clearTimeout(pb.timer);
+      pb.timer = null;
+      pb.chan = null;
+      sendToSession(sess, {
+        type: 'playbook_step',
+        index: pb.idx,
+        total: pb.steps.length,
+        status,
+        exitCode,
+        timedOut: !!timedOut,
+        command: step.command,
+      });
+      const last = pb.idx >= pb.steps.length - 1;
+      // A failed/timed-out step aborts the run — later steps assume earlier state.
+      if (status !== 'ok' || last) {
+        sess.playbook = null;
+        sendToSession(sess, { type: 'playbook_done', ok: status === 'ok' });
+        return;
+      }
+      pb.idx++;
+      pb.stepDone = false;
+      runPlaybookStep(sess);
+    };
+
+    sess.conn.exec(step.command, (err, ch) => {
+      if (sess.playbook !== pb) {
+        try { ch?.close(); } catch {}
+        return;
+      }
+      if (err) return finishStep('fail', null, false);
+      pb.chan = ch;
+      ch.on('data', (d) => sessionOutput(sess, d));
+      ch.stderr?.on('data', (d) => sessionOutput(sess, d));
+      pb.timer = setTimeout(() => {
+        try { ch.close(); } catch {}
+        finishStep('timeout', null, true);
+      }, timeoutMs);
+      pb.timer.unref?.();
+      ch.on('close', (code) => finishStep(code === 0 ? 'ok' : 'fail', code ?? null, false));
     });
-    pb.idx++;
-    pb.buf = '';
-    if (pb.idx >= pb.steps.length) {
-      sess.playbook = null;
-      sendToSession(sess, { type: 'playbook_done', ok: exitCode === 0 });
-      return;
-    }
-    // A failed step aborts the run — later steps assume earlier state.
-    if (exitCode !== 0) {
-      sess.playbook = null;
-      sendToSession(sess, { type: 'playbook_done', ok: false });
-      return;
-    }
-    runPlaybookStep(sess);
   }
 
   function startRecording() {

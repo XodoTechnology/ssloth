@@ -88,32 +88,55 @@ function requireAdmin(req, res, next) {
 }
 
 // CSRF defense: the API is only consumed by our SPA, so for state-changing
-// requests require a same-origin Origin/Fetch metadata signal. Combined with
-// SameSite=Lax cookies this blocks cross-site request forgery.
+// requests require a *positive* same-origin signal — a matching Origin
+// header or Sec-Fetch-Site: same-origin. Same-site is NOT sufficient
+// (sibling subdomains stay within SameSite=Lax scope), and absent headers
+// are no longer a free pass (a plain cross-site <form> POST omits them).
+// Non-browser API clients must send an Origin header matching the Host.
 function checkOrigin(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const fetchSite = req.headers['sec-fetch-site'];
-  if (fetchSite && !['same-origin', 'same-site', 'none'].includes(fetchSite)) {
+  if (fetchSite === 'same-origin') return next();
+  if (fetchSite && fetchSite !== 'none') {
     return res.status(403).json({ error: 'cross-site request blocked' });
   }
   const origin = req.headers.origin;
-  if (origin) {
-    try {
-      const host = new URL(origin).host;
-      if (host !== req.headers.host) {
-        return res.status(403).json({ error: 'origin mismatch' });
-      }
-    } catch {
-      return res.status(403).json({ error: 'invalid origin' });
-    }
+  if (!origin) return res.status(403).json({ error: 'origin required' });
+  try {
+    if (new URL(origin).host === req.headers.host) return next();
+    return res.status(403).json({ error: 'origin mismatch' });
+  } catch {
+    return res.status(403).json({ error: 'invalid origin' });
+  }
+}
+
+// Loopback-only deployments (desktop mode, BIND=127.0.0.1) must also verify
+// the Host header — otherwise a DNS-rebinding domain (attacker.com -> 127.0.0.1)
+// satisfies the Origin==Host check while the browser treats it as a different
+// site entirely. Require the Host to be an actual loopback name.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+function isLoopbackHostHeader(hostHeader) {
+  try {
+    const hostname = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+    return LOOPBACK_HOSTNAMES.has(hostname);
+  } catch {
+    return false;
+  }
+}
+function checkLoopbackHost(req, res, next) {
+  if (!DESKTOP) return next();
+  if (!isLoopbackHostHeader(req.headers.host)) {
+    return res.status(403).json({ error: 'invalid host header' });
   }
   next();
 }
 
 // Same check for the WebSocket upgrade, which always sends Origin.
+// In desktop mode the Host must also be loopback (DNS-rebinding guard).
 function checkWsOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return false;
+  if (DESKTOP && !isLoopbackHostHeader(req.headers.host)) return false;
   try {
     return new URL(origin).host === req.headers.host;
   } catch {
@@ -136,5 +159,7 @@ module.exports = {
   requireAdmin,
   checkOrigin,
   checkWsOrigin,
+  checkLoopbackHost,
+  isLoopbackHostHeader,
   auditReq,
 };

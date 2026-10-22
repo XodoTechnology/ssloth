@@ -8,6 +8,7 @@ const { auditReq } = require('../auth');
 const { listHostKeys, removeHostKey } = require('../ssh/manager');
 
 const router = express.Router();
+const { stopTunnelsForHost } = require('./tunnels');
 
 const AUTH_TYPES = new Set(['credential', 'password', 'ask']);
 
@@ -94,9 +95,15 @@ router.post('/', (req, res) => {
   if (!data.name || !data.hostname || !data.username) {
     return res.status(400).json({ error: 'name, hostname and username are required' });
   }
+  if (data.shared === 1 && !req.user.is_admin) {
+    return res.status(403).json({ error: 'only admins can share hosts' });
+  }
   if (data.auth_type === 'credential' && !data.credential_id) {
     return res.status(400).json({ error: 'credential_id required for credential auth' });
   }
+  // Don't store secrets that don't match the auth mode.
+  if (data.auth_type !== 'password') delete data.password_enc;
+  if (data.auth_type === 'password' || data.auth_type === 'ask') data.credential_id = null;
   if (data.credential_id != null) {
     const cred = db
       .prepare('SELECT id FROM credentials WHERE id = ? AND user_id = ?')
@@ -128,6 +135,19 @@ router.put('/:id', (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
+  if (data.shared === 1 && !req.user.is_admin) {
+    return res.status(403).json({ error: 'only admins can share hosts' });
+  }
+  // Auth-mode changes drop the secrets that no longer apply — otherwise a
+  // stale password_enc lingers (and still gets exported) after switching
+  // to credential/ask auth.
+  const nextAuth = data.auth_type ?? existing.auth_type;
+  if (nextAuth !== 'password' && req.body.password === undefined) {
+    data.password_enc = null;
+  }
+  if (nextAuth !== 'credential' && req.body.credential_id === undefined) {
+    data.credential_id = null;
+  }
   if (data.credential_id != null) {
     const cred = db
       .prepare('SELECT id FROM credentials WHERE id = ? AND user_id = ?')
@@ -156,6 +176,8 @@ router.put('/:id', (req, res) => {
 router.delete('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM hosts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
+  // CASCADE deletes the tunnel rows — stop the live listeners too.
+  stopTunnelsForHost(existing.id);
   db.prepare('DELETE FROM hosts WHERE id = ?').run(existing.id);
   auditReq(req, 'host.deleted', `${existing.name} (${existing.hostname})`);
   res.json({ ok: true });
@@ -185,10 +207,15 @@ router.get('/status', async (req, res) => {
   const hosts = db
     .prepare('SELECT id, hostname, port FROM hosts WHERE user_id = ? OR shared = 1')
     .all(req.user.id);
-  const entries = await Promise.all(
-    hosts.map((h) => probePort(h.hostname, h.port).then((s) => [h.id, s]))
-  );
-  const result = Object.fromEntries(entries);
+  // Cap concurrency — hundreds of hosts at once would flood the fd table.
+  const result = {};
+  const BATCH = 16;
+  for (let i = 0; i < hosts.length; i += BATCH) {
+    const entries = await Promise.all(
+      hosts.slice(i, i + BATCH).map((h) => probePort(h.hostname, h.port).then((s) => [h.id, s]))
+    );
+    for (const [id, s] of entries) result[id] = s;
+  }
   statusCache.set(req.user.id, { at: Date.now(), result });
   res.json({ status: result });
 });

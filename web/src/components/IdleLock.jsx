@@ -87,10 +87,13 @@ export default function IdleLock() {
   const onPinKey = (k) => {
     if (busy) return;
     if (k === 'back') return setPin((p) => p.slice(0, -1));
+    if (k === 'ok') return pin.length >= 4 && unlockPin(pin);
     if (pin.length >= 8) return;
     const next = pin + k;
     setPin(next);
-    if (next.length >= 4) unlockPin(next);
+    // Auto-submit only at the max length — firing at 4 would make longer
+    // PINs impossible to type.
+    if (next.length === 8) unlockPin(next);
   };
 
   if (!locked) return null;
@@ -119,17 +122,23 @@ export default function IdleLock() {
               ))}
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0'].map((k) => (
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'back', '0', 'ok'].map((k) => (
                 <button
                   key={k}
                   type="button"
-                  className="btn-ghost border border-ink-700 !py-2 text-sm font-mono"
+                  className={`!py-2 text-sm font-mono ${
+                    k === 'ok'
+                      ? 'bg-emerald-900/60 text-emerald-300 hover:bg-emerald-800/60 rounded-md disabled:opacity-40'
+                      : 'btn-ghost border border-ink-700'
+                  }`}
+                  disabled={k === 'ok' && pin.length < 4}
                   onClick={() => onPinKey(k)}
                 >
-                  {k === 'back' ? '⌫' : k}
+                  {k === 'back' ? '⌫' : k === 'ok' ? '✓' : k}
                 </button>
               ))}
             </div>
+            <div className="text-[10px] text-zinc-600">4–8 digits — press ✓ (submits at 8)</div>
             <button className="text-[11px] text-zinc-500 hover:text-zinc-300" onClick={() => setMode('password')}>
               use password instead
             </button>

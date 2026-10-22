@@ -8,14 +8,21 @@ const { resolveConnectSpec, tryConnect, establishConn, getStoredHostKey } = requ
 
 const router = express.Router();
 
-// Active forwards: tunnelId -> { server, conn, spec }
+// Active forwards: tunnelId -> { server, conn, userId, hostId }
 const active = new Map();
+
+// A dynamic tunnel is a ZERO-AUTH SOCKS5 proxy and a local forward is an open
+// TCP listener — binding either to a non-loopback address exposes them to the
+// whole network. Loopback only unless SSLOTH_ALLOW_PUBLIC_TUNNELS is set AND
+// the requesting user is an admin (checked in cleanTunnel's caller).
+const ALLOW_PUBLIC = process.env.SSLOTH_ALLOW_PUBLIC_TUNNELS === 'true';
+const LOOPBACK_BINDS = new Set(['127.0.0.1', '::1', 'localhost', '[::1]']);
 
 function tunnelView(row) {
   return { ...row, active: active.has(row.id) };
 }
 
-function cleanTunnel(body, { partial = false } = {}) {
+function cleanTunnel(body, { partial = false, allowPublic = false } = {}) {
   const out = {};
   if (!partial || body.name !== undefined) out.name = String(body.name ?? '').slice(0, 128).trim();
   if (!partial || body.type !== undefined) {
@@ -24,10 +31,13 @@ function cleanTunnel(body, { partial = false } = {}) {
   if (!partial || body.host_id !== undefined) out.host_id = parseInt(body.host_id, 10);
   if (!partial || body.bind_address !== undefined) {
     out.bind_address = String(body.bind_address || '127.0.0.1').slice(0, 64).trim();
+    if (out.bind_address && !LOOPBACK_BINDS.has(out.bind_address) && !allowPublic) {
+      throw new Error('bind_address must be a loopback address (set SSLOTH_ALLOW_PUBLIC_TUNNELS=true and be an admin to override)');
+    }
   }
   if (!partial || body.local_port !== undefined) {
     const p = parseInt(body.local_port, 10);
-    if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('invalid local_port');
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) throw new Error('invalid local_port (must be 1024-65535)');
     out.local_port = p;
   }
   if (!partial || body.remote_host !== undefined) out.remote_host = String(body.remote_host ?? '').slice(0, 255).trim();
@@ -49,7 +59,7 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   let data;
   try {
-    data = cleanTunnel(req.body || {});
+    data = cleanTunnel(req.body || {}, { allowPublic: ALLOW_PUBLIC && req.user.is_admin });
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -119,7 +129,7 @@ router.post('/:id/start', async (req, res) => {
       server.listen(t.local_port, t.bind_address, resolve);
     });
     conn.on('close', () => stopTunnel(t.id));
-    active.set(t.id, { server, conn });
+    active.set(t.id, { server, conn, userId: t.user_id, hostId: t.host_id });
     const via =
       t.type === 'dynamic'
         ? `${t.bind_address}:${t.local_port} (SOCKS5)`
@@ -223,4 +233,19 @@ function stopTunnel(id) {
   try { a.conn.end(); } catch {}
 }
 
+// Bulk teardown — DB rows may already be gone (CASCADE on user/host delete),
+// so these work off the in-memory map, not the database.
+function stopTunnelsForUser(userId) {
+  for (const [id, a] of [...active]) {
+    if (a.userId === userId) stopTunnel(id);
+  }
+}
+function stopTunnelsForHost(hostId) {
+  for (const [id, a] of [...active]) {
+    if (a.hostId === hostId) stopTunnel(id);
+  }
+}
+
 module.exports = router;
+module.exports.stopTunnelsForUser = stopTunnelsForUser;
+module.exports.stopTunnelsForHost = stopTunnelsForHost;

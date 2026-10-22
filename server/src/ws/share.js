@@ -23,7 +23,7 @@ function handleShareWs(ws, req, token) {
   }
 
   const canWrite = share.mode === 'control';
-  attachViewer(session, ws, share.mode);
+  attachViewer(session, ws, share.mode, share.id);
   send({ type: 'ready', label: share.label, mode: share.mode, expires_at: share.expires_at * 1000 });
   audit(null, 'share.viewer_joined', `'${share.label}' (${share.mode})`, req);
 

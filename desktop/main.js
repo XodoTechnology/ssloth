@@ -10,7 +10,7 @@
 // standard Node prebuilds — no Electron ABI rebuild needed. In dev (`npm
 // run dev`) it just uses the `node` on PATH.
 
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -108,6 +108,41 @@ function createWindow(url) {
     },
   });
   mainWindow.loadURL(url);
+
+  // Navigation hardening: the only legitimate content is our own loopback
+  // server (plus its /share/ links). Block in-window navigation anywhere
+  // else, and never open a second BrowserWindow — external http(s) links
+  // go to the system browser instead, so untrusted pages never inherit our
+  // (admittedly minimal) renderer privileges.
+  const allowed = (target) => {
+    try {
+      const u = new URL(target);
+      const srv = new URL(serverUrl);
+      return u.origin === srv.origin;
+    } catch {
+      return false;
+    }
+  };
+
+  mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
+    try {
+      const u = new URL(target);
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        shell.openExternal(target);
+      }
+    } catch {}
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (e, target) => {
+    if (!allowed(target)) {
+      e.preventDefault();
+      try {
+        const u = new URL(target);
+        if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(target);
+      } catch {}
+    }
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();

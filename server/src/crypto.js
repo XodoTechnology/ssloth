@@ -3,16 +3,20 @@
 const crypto = require('crypto');
 const { MASTER_KEY } = require('./config');
 
+const { promisify } = require('util');
+const scryptAsync = promisify(crypto.scrypt);
+
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 64;
 
 // ---- Password hashing (scrypt) ----
-
-function hashPassword(password) {
+// Async so logins/PIN checks don't stall the event loop (terminal I/O) —
+// N=16384 takes ~50-100ms per derivation.
+async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN, {
+  const hash = await scryptAsync(password, salt, SCRYPT_KEYLEN, {
     N: SCRYPT_N,
     r: SCRYPT_R,
     p: SCRYPT_P,
@@ -20,13 +24,13 @@ function hashPassword(password) {
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
-function verifyPassword(password, stored) {
+async function verifyPassword(password, stored) {
   try {
     const [scheme, n, r, p, saltB64, hashB64] = String(stored).split('$');
     if (scheme !== 'scrypt') return false;
     const salt = Buffer.from(saltB64, 'base64');
     const expected = Buffer.from(hashB64, 'base64');
-    const actual = crypto.scryptSync(password, salt, expected.length, {
+    const actual = await scryptAsync(password, salt, expected.length, {
       N: parseInt(n, 10),
       r: parseInt(r, 10),
       p: parseInt(p, 10),
@@ -38,7 +42,16 @@ function verifyPassword(password, stored) {
 }
 
 // Dummy hash so login timing does not reveal whether a username exists.
-const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
+// Sync is fine here — it runs once at module load, before the server listens.
+const DUMMY_HASH = (() => {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(crypto.randomBytes(16).toString('hex'), salt, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+  });
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${hash.toString('base64')}`;
+})();
 
 // ---- Secret encryption at rest (AES-256-GCM) ----
 // Layout: base64( iv[12] | tag[16] | ciphertext )
@@ -137,12 +150,15 @@ function generateTotpSecret() {
   return base32Encode(crypto.randomBytes(20));
 }
 
+// Returns the matched 30s time-step counter on success (for replay
+// prevention — store it and reject counters <= it), or false on mismatch.
 function verifyTotp(secretB32, code) {
   const clean = String(code || '').replace(/\s/g, '');
   if (!/^\d{6}$/.test(clean)) return false;
+  const now = Math.floor(Date.now() / 1000 / 30);
   for (const offset of [-1, 0, 1]) {
     const expected = totpCode(secretB32, offset);
-    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(clean))) return true;
+    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(clean))) return now + offset;
   }
   return false;
 }

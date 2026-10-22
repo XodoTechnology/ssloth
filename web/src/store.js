@@ -2,6 +2,20 @@ import { create } from 'zustand';
 
 let tabSeq = 1;
 
+// {{var}} placeholders in snippet commands — collected and prompted for
+// (via the store's varPrompt) from every run path: terminal dropdown,
+// Snippets page, command palette.
+export function snippetVars(command) {
+  return [...new Set([...command.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)].map((m) => m[1]))];
+}
+export function expandSnippet(command, values) {
+  let cmd = command;
+  for (const [k, v] of Object.entries(values)) {
+    cmd = cmd.replaceAll(new RegExp(`\\{\\{\\s*${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`, 'g'), v);
+  }
+  return cmd;
+}
+
 export const useStore = create((set, get) => ({
   // auth
   user: null,
@@ -18,7 +32,9 @@ export const useStore = create((set, get) => ({
   playbooks: [],
   hostStatus: {}, // hostId -> 'up' | 'down'
   pendingPlaybooks: {}, // tabId -> playbookId to fire once ready
-  locked: false,
+  // Persisted so a page reload can't bypass an engaged idle-lock. It's a UX
+  // guard, not a security boundary — the vault itself stays server-side.
+  locked: localStorage.getItem('ssloth_locked') === '1',
 
   // terminal tabs: [{id, title, target, color}] target={hostId} | {inline:{...}}
   tabs: [],
@@ -36,6 +52,9 @@ export const useStore = create((set, get) => ({
 
   // command palette
   paletteOpen: false,
+
+  // snippet {{var}} fill prompt: {snippet, vars, tabId, execute}
+  varPrompt: null,
 
   // toasts: [{id, kind, text}]
   toasts: [],
@@ -64,7 +83,8 @@ export const useStore = create((set, get) => ({
   },
 
   setUser(user) {
-    set({ user });
+    if (!user) localStorage.removeItem('ssloth_locked'); // logout clears the lock too
+    set({ user, locked: user ? get().locked : false });
   },
 
   setPaletteOpen(v) {
@@ -103,6 +123,8 @@ export const useStore = create((set, get) => ({
     });
   },
   setLocked(v) {
+    if (v) localStorage.setItem('ssloth_locked', '1');
+    else localStorage.removeItem('ssloth_locked');
     set({ locked: v });
   },
 
@@ -207,6 +229,38 @@ export const useStore = create((set, get) => ({
     const paneId = s.activePane[tabId];
     const sender = s.paneSenders[`${tabId}:${paneId}`];
     if (sender?.send) sender.send(text);
+  },
+
+  // Run a snippet into a tab — prompts for {{vars}} first when present.
+  runSnippet(snippet, { tabId, execute = true } = {}) {
+    const s = get();
+    if (!tabId) return s.toast('open a session first', 'error');
+    const vars = snippetVars(snippet.command);
+    if (vars.length) {
+      set({ varPrompt: { snippet, vars, tabId, execute } });
+      return;
+    }
+    s.sendSnippetTo(tabId, snippet.command, execute);
+  },
+
+  sendSnippetTo(tabId, command, execute) {
+    const s = get();
+    const paneId = s.activePane[tabId];
+    if (s.paneStates[`${tabId}:${paneId}`]?.status !== 'ready') {
+      return s.toast('session not connected', 'error');
+    }
+    s.sendToTab(tabId, command + (execute ? '\n' : ''));
+  },
+
+  submitVarPrompt(values) {
+    const vp = get().varPrompt;
+    if (!vp) return;
+    set({ varPrompt: null });
+    get().sendSnippetTo(vp.tabId, expandSnippet(vp.snippet.command, values), vp.execute);
+  },
+
+  closeVarPrompt() {
+    set({ varPrompt: null });
   },
 
   activeSender(tabId) {

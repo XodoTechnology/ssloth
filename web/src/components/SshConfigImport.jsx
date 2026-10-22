@@ -76,8 +76,11 @@ export default function SshConfigImport({ onClose }) {
           errs++;
         }
       }
-      // jump resolution: existing host names + names created this run
+      // jump resolution: existing host names + names created this run.
+      // Two passes — a ProxyJump may point at a host defined LATER in the
+      // file, so links are applied after every entry exists.
       const nameToId = new Map(hosts.map((h) => [h.name, h.id]));
+      const createdHosts = [];
       for (const e2 of parsed) {
         try {
           const credId = e2.identityfile && credIds[e2.identityfile] ? credIds[e2.identityfile] : null;
@@ -90,14 +93,21 @@ export default function SshConfigImport({ onClose }) {
               username: e2.username || 'root',
               auth_type: credId ? 'credential' : 'ask',
               credential_id: credId,
-              jump_host_id: e2.proxyjump ? nameToId.get(e2.proxyjump) || null : null,
             },
           });
           nameToId.set(e2.name, r.host.id);
+          createdHosts.push({ entry: e2, id: r.host.id });
           created++;
         } catch {
           errs++;
         }
+      }
+      for (const { entry, id } of createdHosts) {
+        const jumpId = entry.proxyjump ? nameToId.get(entry.proxyjump) : null;
+        if (!jumpId || jumpId === id) continue;
+        try {
+          await api(`/api/hosts/${id}`, { method: 'PUT', body: { jump_host_id: jumpId } });
+        } catch {}
       }
       setResult(`imported ${created} hosts${creds ? ` + ${creds} keys` : ''}${errs ? ` (${errs} errors)` : ''}`);
       refreshAll(api);

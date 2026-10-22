@@ -22,6 +22,8 @@ const {
   requireAuth,
 } = require('../auth');
 const { DESKTOP } = require('../config');
+const { destroyUserSessions } = require('../ssh/manager');
+const { stopTunnelsForUser } = require('./tunnels');
 
 const router = express.Router();
 
@@ -58,7 +60,7 @@ router.get('/state', (req, res) => {
   });
 });
 
-router.post('/setup', authLimiter, (req, res) => {
+router.post('/setup', authLimiter, async (req, res) => {
   const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
   if (userCount > 0) return res.status(403).json({ error: 'already initialized' });
 
@@ -71,17 +73,17 @@ router.post('/setup', authLimiter, (req, res) => {
   }
   const info = db
     .prepare('INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)')
-    .run(username, hashPassword(password));
+    .run(username, await hashPassword(password));
   audit(null, 'auth.setup', `admin user '${username}' created`, req);
   createSession(info.lastInsertRowid, req, res);
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
   res.json({ user: publicUser(user) });
 });
 
-router.post('/login', authLimiter, (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   const { username, password, totp } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
-  const ok = verifyPassword(String(password || ''), user ? user.password_hash : DUMMY_HASH);
+  const ok = await verifyPassword(String(password || ''), user ? user.password_hash : DUMMY_HASH);
   if (!ok) {
     audit(user, 'auth.login_failed', `bad password for '${username}'`, req);
     return res.status(401).json({ error: 'invalid credentials' });
@@ -91,10 +93,13 @@ router.post('/login', authLimiter, (req, res) => {
       return res.status(401).json({ error: 'totp required', totp_required: true });
     }
     const secret = decryptSecret(user.totp_secret);
-    if (!verifyTotp(secret, totp)) {
-      audit(user, 'auth.login_failed', 'bad TOTP code', req);
+    const step = verifyTotp(secret, totp);
+    // Replay protection: each 30s step may only be consumed once.
+    if (step === false || step <= user.totp_last_step) {
+      audit(user, 'auth.login_failed', step === false ? 'bad TOTP code' : 'replayed TOTP code', req);
       return res.status(401).json({ error: 'invalid authenticator code', totp_required: true });
     }
+    db.prepare('UPDATE users SET totp_last_step = ? WHERE id = ?').run(step, user.id);
   }
   createSession(user.id, req, res);
   audit(user, 'auth.login', 'login success', req);
@@ -104,23 +109,31 @@ router.post('/login', authLimiter, (req, res) => {
 router.post('/logout', (req, res) => {
   const user = resolveCookie(req);
   destroySession(req, res);
-  if (user) audit(user, 'auth.logout', '', req);
+  if (user) {
+    // Logging out means disconnecting — tear down live SSH sessions and
+    // tunnels so nothing keeps running under a dead login.
+    destroyUserSessions(user.id);
+    stopTunnelsForUser(user.id);
+    audit(user, 'auth.logout', '', req);
+  }
   res.json({ ok: true });
 });
 
 // ---- Account self-service ----
 
-router.post('/password', requireAuth, (req, res) => {
+router.post('/password', authLimiter, requireAuth, async (req, res) => {
   const { current_password, new_password } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(current_password || ''), user.password_hash)) {
+  if (!(await verifyPassword(String(current_password || ''), user.password_hash))) {
     return res.status(403).json({ error: 'current password incorrect' });
   }
   if (typeof new_password !== 'string' || new_password.length < 10) {
     return res.status(400).json({ error: 'new password must be at least 10 characters' });
   }
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(new_password), user.id);
-  // Invalidate all other sessions for this account, keeping this one.
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(new_password), user.id);
+  // Invalidate all other sessions for this account, keeping this one, and
+  // kill the user's live SSH sessions/tunnels — a password change is a
+  // security event, nothing should keep running under the old credential.
   const token = req.cookies?.[COOKIE_NAME];
   if (token) {
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(
@@ -128,6 +141,8 @@ router.post('/password', requireAuth, (req, res) => {
       sha256(token)
     );
   }
+  destroyUserSessions(user.id);
+  stopTunnelsForUser(user.id);
   audit(req.user, 'auth.password_changed', '', req);
   res.json({ ok: true });
 });
@@ -135,9 +150,9 @@ router.post('/password', requireAuth, (req, res) => {
 // Lock-screen verification — checks the current user's password without
 // touching the session (unlike /login: no cookie, no TOTP). For the idle
 // lock overlay, not for authentication.
-router.post('/verify', requireAuth, (req, res) => {
+router.post('/verify', authLimiter, requireAuth, async (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+  if (!(await verifyPassword(String(req.body?.password || ''), user.password_hash))) {
     return res.status(403).json({ error: 'wrong password' });
   }
   res.json({ ok: true });
@@ -149,12 +164,18 @@ const PIN_RE = /^\d{4,8}$/;
 
 // PIN unlock — desktop mode only. Tries each configured PIN hash so a shared
 // desktop DB with multiple accounts still resolves to the right user.
-router.post('/pin', authLimiter, (req, res) => {
+router.post('/pin', authLimiter, async (req, res) => {
   if (!DESKTOP) return res.status(403).json({ error: 'pin login is desktop only' });
   const pin = String(req.body?.pin || '');
   if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'pin must be 4-8 digits' });
   const rows = db.prepare('SELECT * FROM users WHERE pin_hash IS NOT NULL').all();
-  const user = rows.find((u) => verifyPassword(pin, u.pin_hash));
+  let user = null;
+  for (const u of rows) {
+    if (await verifyPassword(pin, u.pin_hash)) {
+      user = u;
+      break;
+    }
+  }
   if (!user) {
     audit(null, 'auth.pin_failed', 'bad pin', req);
     return res.status(401).json({ error: 'wrong pin' });
@@ -164,23 +185,23 @@ router.post('/pin', authLimiter, (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-router.post('/pin/setup', requireAuth, (req, res) => {
+router.post('/pin/setup', authLimiter, requireAuth, async (req, res) => {
   if (!DESKTOP) return res.status(403).json({ error: 'pin is desktop only' });
   const pin = String(req.body?.pin || '');
   if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'pin must be 4-8 digits' });
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+  if (!(await verifyPassword(String(req.body?.password || ''), user.password_hash))) {
     return res.status(403).json({ error: 'password incorrect' });
   }
-  db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(hashPassword(pin), user.id);
+  db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(await hashPassword(pin), user.id);
   audit(req.user, 'auth.pin_set', '', req);
   res.json({ ok: true });
 });
 
-router.post('/pin/disable', requireAuth, (req, res) => {
+router.post('/pin/disable', authLimiter, requireAuth, async (req, res) => {
   if (!DESKTOP) return res.status(403).json({ error: 'pin is desktop only' });
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+  if (!(await verifyPassword(String(req.body?.password || ''), user.password_hash))) {
     return res.status(403).json({ error: 'password incorrect' });
   }
   db.prepare('UPDATE users SET pin_hash = NULL WHERE id = ?').run(req.user.id);
@@ -190,9 +211,17 @@ router.post('/pin/disable', requireAuth, (req, res) => {
 
 // ---- TOTP enrollment ----
 
-router.post('/totp/setup', requireAuth, async (req, res) => {
+// Generates a *pending* secret — never touches the live totp_secret, so a
+// stolen session can't silently strip or replace 2FA. The pending secret
+// only activates via /totp/enable with a valid code, or via /totp/disable
+// (password + current code) to re-enroll.
+router.post('/totp/setup', authLimiter, requireAuth, async (req, res) => {
+  const user = db.prepare('SELECT totp_enabled FROM users WHERE id = ?').get(req.user.id);
+  if (user.totp_enabled) {
+    return res.status(400).json({ error: '2FA already enabled — disable it first to re-enroll' });
+  }
   const secret = generateTotpSecret();
-  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?').run(
+  db.prepare('UPDATE users SET totp_pending_secret = ? WHERE id = ?').run(
     encryptSecret(secret),
     req.user.id
   );
@@ -202,24 +231,38 @@ router.post('/totp/setup', requireAuth, async (req, res) => {
   res.json({ secret, otpauth_url: url, qr });
 });
 
-router.post('/totp/enable', requireAuth, (req, res) => {
+router.post('/totp/enable', authLimiter, requireAuth, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!user.totp_secret) return res.status(400).json({ error: 'run setup first' });
-  const secret = decryptSecret(user.totp_secret);
-  if (!verifyTotp(secret, req.body?.code)) {
+  if (!user.totp_pending_secret) return res.status(400).json({ error: 'run setup first' });
+  const secret = decryptSecret(user.totp_pending_secret);
+  const step = verifyTotp(secret, req.body?.code);
+  if (step === false) {
     return res.status(400).json({ error: 'code did not match, try again' });
   }
-  db.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').run(req.user.id);
+  db.prepare(
+    'UPDATE users SET totp_enabled = 1, totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ? WHERE id = ?'
+  ).run(step, req.user.id);
   audit(req.user, 'auth.totp_enabled', '', req);
   res.json({ ok: true });
 });
 
-router.post('/totp/disable', requireAuth, (req, res) => {
+// Disabling 2FA requires BOTH the password and a current authenticator code —
+// a stolen session alone can't strip the second factor.
+router.post('/totp/disable', authLimiter, requireAuth, async (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(req.body?.password || ''), user.password_hash)) {
+  if (!(await verifyPassword(String(req.body?.password || ''), user.password_hash))) {
     return res.status(403).json({ error: 'password incorrect' });
   }
-  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(req.user.id);
+  if (user.totp_enabled) {
+    const step = verifyTotp(decryptSecret(user.totp_secret), req.body?.code);
+    if (step === false || step <= user.totp_last_step) {
+      return res.status(403).json({ error: 'valid authenticator code required to disable 2FA' });
+    }
+    db.prepare('UPDATE users SET totp_last_step = ? WHERE id = ?').run(step, user.id);
+  }
+  db.prepare(
+    'UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = 0 WHERE id = ?'
+  ).run(req.user.id);
   audit(req.user, 'auth.totp_disabled', '', req);
   res.json({ ok: true });
 });

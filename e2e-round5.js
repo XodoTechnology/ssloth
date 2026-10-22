@@ -7,7 +7,12 @@ let cookie = '';
 async function api(path, opts = {}) {
   const r = await fetch(BASE + path, {
     method: opts.method || 'GET',
-    headers: { ...(opts.body ? { 'Content-Type': 'application/json' } : {}), cookie },
+    headers: {
+      ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+      cookie,
+      // mutations now require a same-origin Origin header (CSRF hardening)
+      origin: BASE,
+    },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const sc = r.headers.get('set-cookie');
