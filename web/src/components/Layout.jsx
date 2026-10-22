@@ -68,9 +68,7 @@ export default function Layout() {
     <div className="h-full flex">
       <aside className="w-52 shrink-0 border-r border-ink-700 bg-ink-900 flex flex-col">
         <div className="flex items-center gap-2 px-4 h-14 border-b border-ink-700">
-          <span className="text-emerald-400">
-            <Terminal size={20} />
-          </span>
+          <img src="/sloth.svg" alt="" className="w-6 h-6" />
           <span className="font-bold text-zinc-100 tracking-tight">ssloth</span>
         </div>
         <nav className="flex-1 p-2 space-y-0.5">

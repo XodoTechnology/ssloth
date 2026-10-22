@@ -99,6 +99,7 @@ function createWindow(url) {
     autoHideMenuBar: true,
     backgroundColor: '#0a0d10',
     title: 'ssloth',
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       // remote content is our own localhost server; keep the renderer locked down
       contextIsolation: true,

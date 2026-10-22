@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, ShieldCheck, Delete } from 'lucide-react';
+import { ShieldCheck, Delete } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 
@@ -125,9 +125,7 @@ export default function Login({ setupMode }) {
     <div className="h-full flex items-center justify-center bg-ink-950 p-4">
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <span className="text-emerald-400">
-            <Terminal size={30} />
-          </span>
+          <img src="/sloth.svg" alt="ssloth" className="w-11 h-11" />
           <span className="text-3xl font-bold tracking-tight text-zinc-100">ssloth</span>
         </div>
 

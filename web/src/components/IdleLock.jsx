@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Lock, Terminal } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 
@@ -102,9 +102,7 @@ export default function IdleLock() {
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-ink-950/95 backdrop-blur">
       <div className="w-80 card p-6 space-y-4 text-center">
         <div className="flex flex-col items-center gap-2">
-          <span className="text-emerald-400">
-            <Terminal size={26} />
-          </span>
+          <img src="/sloth.svg" alt="" className="w-9 h-9" />
           <div className="font-bold text-zinc-100">ssloth</div>
           <div className="flex items-center gap-1.5 text-xs text-zinc-500">
             <Lock size={12} /> locked — sessions keep running
