@@ -1,0 +1,6 @@
+{
+  "connections": [
+    { "label": "monitoring", "address": "mon.internal", "port": 22, "user": "zabbix", "group": "Infra" },
+    { "name": "gitlab", "hostname": "git.internal", "username": "git", "password": "hunter2", "proxyJump": "bastion" }
+  ]
+}

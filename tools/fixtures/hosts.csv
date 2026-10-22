@@ -1,0 +1,4 @@
+name,hostname,port,username,password,folder,jump,tags
+web-01,web01.internal,22,deploy,pw-abc123,Production,,web
+web-02,"web02.internal, quoted",2200,deploy,,Production,bastion-jump,web
+cache-01,10.9.9.9,22,cache,,,,

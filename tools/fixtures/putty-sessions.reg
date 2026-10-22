@@ -1,0 +1,22 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\prod-web-1]
+"HostName"="10.0.1.15"
+"PortNumber"=dword:00000016
+"Protocol"="ssh"
+"UserName"="deploy"
+"Present"=dword:00000001
+"LogType"=dword:00000000
+"PublicKeyFile"="C:\\Users\\me\\keys\\prod.ppk"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Staging%2Fapp-01]
+"HostName"="app01.staging.internal"
+"PortNumber"=dword:000008ae
+"Protocol"="ssh"
+"UserName"="ubuntu"
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\router-telnet]
+"HostName"="192.168.0.1"
+"PortNumber"=dword:00000017
+"Protocol"="telnet"
+"UserName"="admin"

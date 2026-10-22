@@ -1,0 +1,18 @@
+# test ssh config
+Host *
+  ServerAliveInterval 30
+
+Host bastion
+  HostName bastion.corp.example
+  User jumpadmin
+  IdentityFile ~/.ssh/id_ed25519
+
+Host db-prod
+  HostName 10.20.0.30
+  Port 22
+  User postgres
+  ProxyJump bastion,backup-jump:2222
+  IdentityFile ~/.ssh/id_ed25519
+
+Host wildcard*
+  HostName ignored

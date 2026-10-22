@@ -40,6 +40,14 @@
       {
         "from": "stage/node",
         "to": "node"
+      },
+      {
+        "from": "../tools",
+        "to": "tools",
+        "filter": [
+          "**/*",
+          "!fixtures/**"
+        ]
       }
     ],
     "win": {

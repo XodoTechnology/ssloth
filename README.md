@@ -202,6 +202,43 @@ macOS-ARM artifacts on a `v*` tag push. Unsigned mac builds trip Gatekeeper
 once: right-click → Open, or `xattr -d com.apple.quarantine ssloth.app`.
 Proper signing/notarization requires an Apple Developer account.
 
+## Importing from other SSH clients
+
+`tools/ssloth-import.js` is a **standalone** converter — zero deps, never
+touches the app or its database. It reads other clients' config and writes a
+ssloth vault file you then import via **Settings → Vault → Import**:
+
+```bash
+node tools/ssloth-import.js --mremoteng confCons.xml -o ssloth-import.json --seal
+node tools/ssloth-import.js --putty-export putty.reg          # regedit /e export
+node tools/ssloth-import.js --putty-live                      # Windows: live registry
+node tools/ssloth-import.js --openssh ~/.ssh/config
+node tools/ssloth-import.js --securecrt "Sessions dir"        # folder of .ini files
+node tools/ssloth-import.js --winscp WinSCP.ini
+node tools/ssloth-import.js --csv hosts.csv                   # or --json
+```
+
+| Source | What imports | Secrets |
+| --- | --- | --- |
+| PuTTY | sessions, folders, users, ports; PPK paths in notes | `.ppk` keys aren't in the registry — convert with `puttygen x.ppk -O private-openssh -o key` |
+| mRemoteNG | `confCons.xml` connections, folder nesting (non-SSH filtered) | legacy AES-CBC passwords decrypted (`--mremoteng-password` for a custom one); AES-GCM/Argon2 exports can't be recovered — re-enter those |
+| OpenSSH | `Host` stanzas, `ProxyJump` chains (become linked bastions), `IdentityFile` keys embedded as key credentials | key passphrases re-entered on the credential |
+| SecureCRT | `.ini` sessions, dir tree → folders | not stored in plaintext — re-enter |
+| WinSCP | `.ini` sessions | stored passwords aren't recovered — re-enter |
+| CSV/JSON | `name,hostname,port,username,password,key_file,folder,jump,tags` | carried when `--seal`d |
+
+Recovered passwords/keys are only written into the vault file if you
+`--seal` (prompts for a passphrase, or use `--seal-passphrase P` /
+`SSLOTH_SEAL_PASS` in scripts) — the file's secrets are encrypted with the
+same scrypt + AES-256-GCM scheme the vault uses, so the importer itself
+never writes plaintext credentials to disk.
+
+**Windows shortcut:** `tools/Import-PuttySessions.ps1` does the PuTTY case
+without Node — it reads the registry and writes the same vault JSON.
+
+**Termius:** there's no documented export format (hosts live in their cloud
+sync). Migrate via CSV/JSON above, or the built-in `~/.ssh/config` import.
+
 ## Development
 
 ```bash
