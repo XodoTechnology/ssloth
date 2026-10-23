@@ -1,6 +1,7 @@
 'use strict';
 
 const { db, audit } = require('../db');
+const { decryptSecret } = require('../crypto');
 const { CastRecorder } = require('../ssh/recorder');
 const {
   resolveConnectSpec,
@@ -119,16 +120,52 @@ function handleTerminalWs(ws, req, user) {
         }
         break;
 
-      case 'auth':
+      case 'auth': {
         if (awaiting !== 'auth') return;
         if (authAttempts++ >= MAX_AUTH_ATTEMPTS) {
           send({ type: 'status', state: 'error', message: 'too many authentication attempts' });
           return ws.close();
         }
         awaiting = null;
-        spec = { ...spec, password: String(msg.password || ''), authType: 'password' };
+        if (msg.credentialId) {
+          // "use a saved key/credential" at the auth prompt — mostly for
+          // quick connects, which have no credential bound to a host row.
+          const cred = db
+            .prepare('SELECT * FROM credentials WHERE id = ? AND user_id = ?')
+            .get(parseInt(msg.credentialId, 10) || 0, user.id);
+          if (!cred) {
+            awaiting = 'auth';
+            send({ type: 'auth_request', reason: 'credential not found — pick another' });
+            return;
+          }
+          try {
+            const secret = JSON.parse(decryptSecret(cred.secret_enc));
+            if (cred.type === 'key' && secret.privateKey) {
+              spec = {
+                ...spec,
+                privateKey: secret.privateKey,
+                passphrase: secret.passphrase,
+                certificate: secret.certificate,
+                password: undefined,
+                authType: 'key',
+              };
+            } else if (secret.password) {
+              spec = { ...spec, password: secret.password, authType: 'password' };
+            } else {
+              awaiting = 'auth';
+              send({ type: 'auth_request', reason: 'that credential has no usable secret' });
+              return;
+            }
+          } catch {
+            send({ type: 'status', state: 'error', message: 'could not decrypt credential' });
+            return ws.close();
+          }
+        } else {
+          spec = { ...spec, password: String(msg.password || ''), authType: 'password' };
+        }
         connect();
         break;
+      }
 
       case 'ping':
         send({ type: 'pong', t: msg.t });

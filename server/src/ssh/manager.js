@@ -200,6 +200,7 @@ function tryConnect(userId, spec, opts = {}) {
             });
           }
           const accepted =
+            (stored && stored.key_b64 === keyB64) ||
             opts.acceptedKeyB64 === keyB64 ||
             opts.acceptedKeys?.[`${spec.hostname}:${spec.port}`] === keyB64;
           if (!accepted) {

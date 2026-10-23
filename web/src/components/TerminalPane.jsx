@@ -35,6 +35,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   const [hostkey, setHostkey] = useState(null);
   const [authPrompt, setAuthPrompt] = useState(null);
   const [password, setPassword] = useState('');
+  const [authCred, setAuthCred] = useState('');
   const [fileDrag, setFileDrag] = useState(false);
   const [pasteConfirm, setPasteConfirm] = useState(null); // {text, lines, preview}
   const stateRef = useRef({ status: 'idle' });
@@ -44,6 +45,8 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   const registerPane = useStore((s) => s.registerPane);
   const broadcastText = useStore((s) => s.broadcastText);
   const setTabBell = useStore((s) => s.setTabBell);
+  const credentials = useStore((s) => s.credentials);
+  const keyCreds = credentials.filter((c) => c.type === 'key' || c.type === 'password');
 
   useEffect(() => {
     activeRef.current = active;
@@ -481,6 +484,38 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
               onChange={(e) => setPassword(e.target.value)}
             />
             <p className="text-[11px] text-zinc-500">sent over this encrypted session — never stored</p>
+            {keyCreds.length > 0 && (
+              <div className="border-t border-ink-700 pt-3 space-y-2">
+                <label className="label">or use a saved credential</label>
+                <div className="flex gap-2">
+                  <select
+                    className="input flex-1"
+                    value={authCred}
+                    onChange={(e) => setAuthCred(e.target.value)}
+                  >
+                    <option value="">choose a key or password credential…</option>
+                    {keyCreds.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.type === 'key' ? '🔑' : '🔒'} {c.name}
+                        {c.username ? ` (${c.username})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn-ghost border border-emerald-800 text-emerald-300 whitespace-nowrap"
+                    disabled={!authCred}
+                    onClick={() => {
+                      sendJson({ type: 'auth', credentialId: parseInt(authCred, 10) });
+                      setAuthPrompt(null);
+                      setAuthCred('');
+                    }}
+                  >
+                    Use this
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
