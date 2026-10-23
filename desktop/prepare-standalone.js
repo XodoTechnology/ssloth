@@ -18,8 +18,8 @@ const opt = (name, dflt) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : dflt;
 };
-const PLATFORM = opt('platform', 'win32');
-const ARCH = opt('arch', 'x64');
+const PLATFORM = opt('platform', process.platform);
+const ARCH = opt('arch', process.arch === 'arm64' ? 'arm64' : 'x64');
 const NODE_VERSION = process.version; // match this Node's ABI for the bundled runtime
 
 const ROOT = path.join(__dirname, '..');
@@ -84,12 +84,21 @@ async function main() {
     fs.rmSync(tgz, { force: true });
   } catch {}
   if (!ok) {
-    // no published prebuild for this target (e.g. darwin-arm64) — compile it
+    // No published prebuild for this target/ABI — compile against the module's
+    // own install script. npm >=10 dropped the --build-from-source CLI flag;
+    // the env var is what prebuild-install actually reads anyway.
     console.warn('no better-sqlite3 prebuild — building from source (needs toolchain)');
-    r = run('npm', ['rebuild', 'better-sqlite3', '--build-from-source'], {
+    r = run('npm', ['rebuild', 'better-sqlite3'], {
       cwd: path.join(STAGE, 'server'),
+      env: { ...process.env, npm_config_build_from_source: 'true' },
     });
-    if (r.status !== 0) process.exit(r.status);
+    if (r.status !== 0) {
+      console.error(
+        '\nsource build failed. If this Node is newer than the dep supports\n' +
+          `(${process.version}, ABI ${abi}), retry with an LTS Node (20/22/24).\n`
+      );
+      process.exit(r.status);
+    }
   }
 
   // 4. web build

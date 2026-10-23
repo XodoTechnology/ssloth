@@ -8,7 +8,7 @@
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
-    "prepare": "node prepare-standalone.js",
+    "stage": "node prepare-standalone.js",
     "dist": "node prepare-standalone.js && electron-builder --win",
     "dist:linux": "node prepare-standalone.js --platform linux && electron-builder --linux",
     "dist:mac": "node prepare-standalone.js --platform darwin && electron-builder --mac"
