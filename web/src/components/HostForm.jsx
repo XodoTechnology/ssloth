@@ -67,7 +67,7 @@ export default function HostForm({ host, onClose, onSaved }) {
         keepalive: parseInt(form.keepalive, 10) || 0,
       };
       if (form.auth_type === 'password' && form.password) body.password = form.password;
-      if (host) {
+      if (host?.id) {
         await api(`/api/hosts/${host.id}`, { method: 'PUT', body });
         toast('host updated', 'success');
       } else {
@@ -86,7 +86,7 @@ export default function HostForm({ host, onClose, onSaved }) {
   };
 
   return (
-    <Modal title={host ? `Edit ${host.name}` : 'New host'} onClose={onClose} wide>
+    <Modal title={host?.id ? `Edit ${host.name}` : 'New host'} onClose={onClose} wide>
       <form onSubmit={save} className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
           <label className="label">Display name</label>
@@ -182,7 +182,18 @@ export default function HostForm({ host, onClose, onSaved }) {
 
         <div>
           <label className="label">Folder / group</label>
-          <input className="input" value={form.folder} onChange={set('folder')} placeholder="production" />
+          <input
+            className="input"
+            list="ssloth-folders"
+            value={form.folder}
+            onChange={set('folder')}
+            placeholder="production — pick or type a new group"
+          />
+          <datalist id="ssloth-folders">
+            {[...new Set(hosts.map((x) => x.folder).filter(Boolean))].map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
         </div>
         <div>
           <label className="label">Region</label>

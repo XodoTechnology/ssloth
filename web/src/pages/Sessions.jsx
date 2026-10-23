@@ -106,15 +106,60 @@ export default function Sessions() {
     [filtered]
   );
 
-  const connectHost = (h) => {
+  // Single click focuses an already-open session instead of stacking dupes;
+  // double-click on a live host offers to open a duplicate.
+  const connectHost = (h, { forceNew = false } = {}) => {
+    const existing = tabs.find((t) => t.target?.hostId === h.id);
+    if (existing && !forceNew) return setActiveTab(existing.id);
     openTab({ hostId: h.id }, h.name, h.color);
+  };
+
+  const maybeDuplicate = (h) => {
+    // live check — the first click of this double-click may have just opened it
+    const existing = useStore.getState().tabs.find((t) => t.target?.hostId === h.id);
+    if (!existing) return;
+    if (Date.now() - (existing.openedAt || 0) < 1500) return; // it just opened via these clicks
+    if (confirm(`"${h.name}" already has an open session — open a duplicate?`)) {
+      connectHost(h, { forceNew: true });
+    }
   };
 
   const connectAll = (list, label) => {
     if (!list.length) return;
     if (list.length > 8 && !confirm(`Open ${list.length} sessions to ${label}?`)) return;
-    for (const h of list) openTab({ hostId: h.id }, h.name, h.color);
+    for (const h of list) connectHost(h, { forceNew: true });
     toast(`opened ${list.length} session${list.length > 1 ? 's' : ''} → ${label}`, 'success');
+  };
+
+  // ---- quick connect + history ----
+  const [quickLog, setQuickLog] = useState(null); // null = panel closed
+  const logQuick = (entry) => {
+    api('/api/hosts/quicklog', { method: 'POST', body: entry })
+      .then((r) => setQuickLog((q) => (q ? { entries: [r.entry, ...q.entries.filter((e) => e.id !== r.entry.id)] } : q)))
+      .catch(() => {});
+  };
+
+  const openQuick = (entry) => {
+    openTab({ inline: { hostname: entry.hostname, port: entry.port, username: entry.username } },
+      `${entry.username}@${entry.hostname}`);
+    logQuick(entry);
+  };
+
+  const toggleQuickLog = async () => {
+    if (quickLog) return setQuickLog(null);
+    try {
+      setQuickLog(await api('/api/hosts/quicklog'));
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const dropQuickEntry = async (e2, id) => {
+    e2.stopPropagation();
+    try {
+      await api(`/api/hosts/quicklog/${id}`, { method: 'DELETE' });
+      setQuickLog((q) => ({ entries: q.entries.filter((x) => x.id !== id) }));
+    } catch {}
   };
 
   const quickConnect = (e) => {
@@ -122,10 +167,7 @@ export default function Sessions() {
     const m = quick.trim().match(/^(?:(?<user>[^@\s]+)@)?(?<host>[^:\s]+)(?::(?<port>\d+))?$/);
     if (!m) return toast('use user@host[:port]', 'error');
     const { user, host, port } = m.groups;
-    openTab(
-      { inline: { hostname: host, port: parseInt(port, 10) || 22, username: user || 'root' } },
-      `${user || 'root'}@${host}`
-    );
+    openQuick({ hostname: host, port: parseInt(port, 10) || 22, username: user || 'root' });
     setQuick('');
   };
 
@@ -147,6 +189,23 @@ export default function Sessions() {
       const r = await api(`/api/hosts/${h.id}/health`);
       setHealthData((d) => ({ ...d, [h.id]: r }));
     } catch {}
+  };
+
+  const moveToFolder = async (e, folder) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = parseInt(e.dataTransfer.getData('text/ssloth-host'), 10);
+    const h = hosts.find((x) => x.id === id);
+    if (!h || h.owned === false) return;
+    const target = folder === 'Ungrouped' ? '' : folder;
+    if ((h.folder || '') === target) return;
+    try {
+      await api(`/api/hosts/${h.id}`, { method: 'PUT', body: { folder: target } });
+      toast(`moved ${h.name} → ${target || 'Ungrouped'}`, 'success');
+      refreshAll(api);
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
   };
 
   const togglePin = async (h) => {
@@ -185,6 +244,12 @@ export default function Sessions() {
     <div
       className="group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
       onClick={() => connectHost(h)}
+      onDoubleClick={() => maybeDuplicate(h)}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/ssloth-host', String(h.id));
+        e.dataTransfer.effectAllowed = 'move';
+      }}
       title={`${h.username}@${h.hostname}:${h.port}`}
     >
       <button
@@ -336,7 +401,61 @@ export default function Sessions() {
               <button className="btn-primary !px-2.5" title="Quick connect" disabled={!quick.trim()}>
                 <Zap size={14} />
               </button>
+              <button
+                type="button"
+                className={`btn-ghost !px-2 border ${quickLog ? 'border-emerald-700 text-emerald-400' : 'border-ink-700'}`}
+                title="Quick-connect history — reconnect or save as host"
+                onClick={toggleQuickLog}
+              >
+                <Clock size={14} />
+              </button>
             </form>
+            {quickLog && (
+              <div className="rounded-md border border-ink-700 bg-ink-900 max-h-44 overflow-y-auto">
+                {quickLog.entries.length === 0 && (
+                  <div className="px-3 py-2.5 text-[11px] text-zinc-600">no quick connects yet</div>
+                )}
+                {quickLog.entries.map((e2) => (
+                  <div
+                    key={e2.id}
+                    className="group/q flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-ink-800"
+                    onClick={() => openQuick(e2)}
+                    title="connect again"
+                  >
+                    <span className="flex-1 font-mono text-[11px] text-zinc-300 truncate">
+                      {e2.username}@{e2.hostname}{e2.port !== 22 ? `:${e2.port}` : ''}
+                    </span>
+                    <span className="text-[9px] text-zinc-600 shrink-0">
+                      {new Date(e2.ts * 1000).toLocaleDateString()}
+                    </span>
+                    {!readOnly && (
+                      <span
+                        className="opacity-0 group-hover/q:opacity-100 text-zinc-500 hover:text-emerald-400"
+                        title="Save as host"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setEditing({
+                            name: `${e2.username}@${e2.hostname}`,
+                            hostname: e2.hostname,
+                            port: e2.port,
+                            username: e2.username,
+                          });
+                        }}
+                      >
+                        <Star size={11} />
+                      </span>
+                    )}
+                    <span
+                      className="opacity-0 group-hover/q:opacity-100 text-zinc-600 hover:text-red-400"
+                      title="Remove from history"
+                      onClick={(ev) => dropQuickEntry(ev, e2.id)}
+                    >
+                      <X size={11} />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="flex gap-1.5">
               <div className="relative flex-1">
                 <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -393,6 +512,8 @@ export default function Sessions() {
                 <button
                   className="group/hdr flex items-center gap-1.5 w-full px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
                   onClick={() => setCollapsed((c) => ({ ...c, [folder]: !c[folder] }))}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => moveToFolder(e, folder)}
                 >
                   <FolderClosed size={12} />
                   <span className="truncate">{folder}</span>
@@ -406,6 +527,18 @@ export default function Sessions() {
                   >
                     <Play size={11} />
                   </span>
+                  {!readOnly && (
+                    <span
+                      className="opacity-0 group-hover/hdr:opacity-100 text-zinc-500 hover:text-emerald-400"
+                      title={`New host in ${folder}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing({ folder: folder === 'Ungrouped' ? '' : folder });
+                      }}
+                    >
+                      <Plus size={11} />
+                    </span>
+                  )}
                   <span className="text-zinc-600">{list.length}</span>
                 </button>
                 {!collapsed[folder] && list.map(renderHost)}
@@ -452,6 +585,23 @@ export default function Sessions() {
                 title={t.bell ? 'terminal bell' : ''}
               />
               {t.title}
+              {t.target?.inline && !readOnly && (
+                <button
+                  className="text-zinc-600 hover:text-emerald-400 opacity-0 group-hover:opacity-100"
+                  title="Save as host"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditing({
+                      name: t.title,
+                      hostname: t.target.inline.hostname,
+                      port: t.target.inline.port,
+                      username: t.target.inline.username,
+                    });
+                  }}
+                >
+                  <Star size={11} />
+                </button>
+              )}
               <button
                 className="text-zinc-600 hover:text-zinc-200 opacity-0 group-hover:opacity-100"
                 onClick={(e) => {

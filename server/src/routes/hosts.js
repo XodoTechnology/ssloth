@@ -217,6 +217,41 @@ function probePort(hostname, port) {
   });
 }
 
+// ---- quick-connect history ----
+// Logs user@host[:port] quick connects so they can be re-opened or promoted
+// into saved hosts later. One row per tuple — reconnecting bumps its ts.
+
+router.get('/quicklog', (req, res) => {
+  const rows = db
+    .prepare('SELECT id, hostname, port, username, ts FROM quick_history WHERE user_id = ? ORDER BY ts DESC, id DESC LIMIT 25')
+    .all(req.user.id);
+  res.json({ entries: rows });
+});
+
+router.post('/quicklog', (req, res) => {
+  const hostname = String(req.body?.hostname ?? '').slice(0, 255).trim();
+  const username = String(req.body?.username ?? '').slice(0, 64).trim();
+  const port = Math.min(Math.max(parseInt(req.body?.port, 10) || 22, 1), 65535);
+  if (!hostname) return res.status(400).json({ error: 'hostname required' });
+  // delete+reinsert so repeats get a fresh id AND ts — a same-second bump
+  // stays correctly ordered
+  db.prepare('DELETE FROM quick_history WHERE user_id = ? AND hostname = ? AND port = ? AND username = ?')
+    .run(req.user.id, hostname, port, username);
+  const id = db
+    .prepare('INSERT INTO quick_history (user_id, hostname, port, username) VALUES (?, ?, ?, ?)')
+    .run(req.user.id, hostname, port, username).lastInsertRowid;
+  // keep the log bounded
+  db.prepare(
+    'DELETE FROM quick_history WHERE user_id = ? AND id NOT IN (SELECT id FROM quick_history WHERE user_id = ? ORDER BY ts DESC, id DESC LIMIT 50)'
+  ).run(req.user.id, req.user.id);
+  res.json({ entry: { id, hostname, port, username } });
+});
+
+router.delete('/quicklog/:id', (req, res) => {
+  db.prepare('DELETE FROM quick_history WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
 router.get('/status', async (req, res) => {
   const cached = statusCache.get(req.user.id);
   if (cached && Date.now() - cached.at < 20000) return res.json({ status: cached.result });

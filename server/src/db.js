@@ -225,6 +225,16 @@ CREATE TABLE IF NOT EXISTS webhooks (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks(user_id);
+
+CREATE TABLE IF NOT EXISTS quick_history (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hostname TEXT NOT NULL,
+  port     INTEGER NOT NULL DEFAULT 22,
+  username TEXT NOT NULL DEFAULT '',
+  ts       INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_quick_user ON quick_history(user_id, ts);
 `);
 
 function audit(user, action, detail, req) {

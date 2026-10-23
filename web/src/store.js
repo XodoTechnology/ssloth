@@ -131,7 +131,7 @@ export const useStore = create((set, get) => ({
   openTab(target, title, color = '') {
     const id = `t${tabSeq++}-${Date.now().toString(36)}`;
     set((s) => ({
-      tabs: [...s.tabs, { id, title, target, color }],
+      tabs: [...s.tabs, { id, title, target, color, openedAt: Date.now() }],
       activeTabId: id,
     }));
     return id;
