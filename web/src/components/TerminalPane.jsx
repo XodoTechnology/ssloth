@@ -3,6 +3,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { CanvasAddon } from '@xterm/addon-canvas';
 import '@xterm/xterm/css/xterm.css';
 import { ShieldAlert, KeyRound, CloudUpload, ClipboardPaste } from 'lucide-react';
 import { useStore } from '../store';
@@ -84,6 +86,18 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     term.loadAddon(links);
     term.loadAddon(search);
     term.open(containerRef.current);
+    // The DOM renderer tears badly under heavy-redraw TUIs (btop, htop,
+    // lazygit). WebGL fixes it; canvas is the fallback for no-GPU webviews.
+    try {
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => {
+        try { gl.dispose(); } catch {}
+        try { term.loadAddon(new CanvasAddon()); } catch {}
+      });
+      term.loadAddon(gl);
+    } catch {
+      try { term.loadAddon(new CanvasAddon()); } catch {}
+    }
     fit.fit();
     term.focus();
 

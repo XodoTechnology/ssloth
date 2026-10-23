@@ -17,6 +17,7 @@ import {
   Play,
   Power,
   Activity,
+  Layers,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -45,6 +46,8 @@ export default function Sessions() {
   const [collapsed, setCollapsed] = useState({});
   const [healthFor, setHealthFor] = useState(null); // hostId -> popover sparkline
   const [healthData, setHealthData] = useState({});
+  const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
+  const [workspaces, setWorkspaces] = useState(null);
 
   useEffect(() => {
     refreshAll(api).catch((e) => toast(e.message, 'error'));
@@ -102,7 +105,15 @@ export default function Sessions() {
       filtered
         .filter((h) => h.last_used_at)
         .sort((a, b) => b.last_used_at - a.last_used_at)
-        .slice(0, 5),
+        .slice(0, 15),
+    [filtered]
+  );
+  const frequent = useMemo(
+    () =>
+      filtered
+        .filter((h) => h.use_count > 0)
+        .sort((a, b) => b.use_count - a.use_count || b.last_used_at - a.last_used_at)
+        .slice(0, 15),
     [filtered]
   );
 
@@ -203,6 +214,55 @@ export default function Sessions() {
       await api(`/api/hosts/${h.id}`, { method: 'PUT', body: { folder: target } });
       toast(`moved ${h.name} → ${target || 'Ungrouped'}`, 'success');
       refreshAll(api);
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
+  // ---- workspaces ----
+  const loadWorkspaces = async () => {
+    try {
+      setWorkspaces(await api('/api/workspaces'));
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const saveWorkspace = async () => {
+    const layout = tabs
+      .map((t) => t.target?.hostId)
+      .filter(Boolean)
+      .map((host) => ({ host }));
+    if (!layout.length) return toast('no saved-host sessions open — quick connects can\'t go in a workspace', 'error');
+    const name = prompt('Workspace name:', 'morning rounds');
+    if (!name?.trim()) return;
+    try {
+      await api('/api/workspaces', { method: 'POST', body: { name: name.trim(), layout } });
+      toast(`workspace "${name.trim()}" saved (${layout.length} sessions)`, 'success');
+      loadWorkspaces();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const openWorkspace = (w) => {
+    let opened = 0;
+    for (const entry of w.layout) {
+      const h = hosts.find((x) => x.id === entry.host);
+      if (h) {
+        connectHost(h);
+        opened++;
+      }
+    }
+    toast(`workspace "${w.name}" — ${opened}/${w.layout.length} sessions up`, opened ? 'success' : 'error');
+  };
+
+  const dropWorkspace = async (e, w) => {
+    e.stopPropagation();
+    if (!confirm(`Delete workspace "${w.name}"?`)) return;
+    try {
+      await api(`/api/workspaces/${w.id}`, { method: 'DELETE' });
+      loadWorkspaces();
     } catch (e2) {
       toast(e2.message, 'error');
     }
@@ -479,6 +539,24 @@ export default function Sessions() {
                 <FileUp size={14} />
               </button>
             </div>
+            <div className="flex rounded-md border border-ink-700 overflow-hidden text-[10px] font-medium">
+              {[['groups', 'Groups'], ['recent', 'Recent'], ['frequent', 'Frequent'], ['workspaces', 'Workspaces']].map(
+                ([v, label]) => (
+                  <button
+                    key={v}
+                    className={`flex-1 py-1 ${
+                      sideView === v ? 'bg-emerald-950/60 text-emerald-300' : 'bg-ink-900 text-zinc-500 hover:text-zinc-300'
+                    }`}
+                    onClick={() => {
+                      setSideView(v);
+                      if (v === 'workspaces' && workspaces === null) loadWorkspaces();
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              )}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-3">
@@ -491,7 +569,57 @@ export default function Sessions() {
                 open all {filtered.length} {query.trim()} sessions
               </button>
             )}
-            {pinned.length > 0 && (
+            {sideView === 'recent' && (
+              <div>
+                <div className="px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Recent</div>
+                {recent.map(renderHost)}
+                {recent.length === 0 && <div className="px-3 py-4 text-xs text-zinc-600">nothing connected yet</div>}
+              </div>
+            )}
+            {sideView === 'frequent' && (
+              <div>
+                <div className="px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Frequent</div>
+                {frequent.map(renderHost)}
+                {frequent.length === 0 && <div className="px-3 py-4 text-xs text-zinc-600">usage counts build up as you connect</div>}
+              </div>
+            )}
+            {sideView === 'workspaces' && (
+              <div className="space-y-1">
+                <button
+                  className="w-full flex items-center justify-center gap-2 rounded-md border border-dashed border-ink-600 px-2 py-2 text-xs text-zinc-400 hover:text-emerald-300 hover:border-emerald-800"
+                  onClick={saveWorkspace}
+                >
+                  <Layers size={12} /> save current tabs as a workspace
+                </button>
+                {(workspaces?.workspaces || []).map((w) => (
+                  <div
+                    key={w.id}
+                    className="group/w flex items-center gap-2 rounded-md px-2 py-2 cursor-pointer border border-ink-700 hover:border-emerald-800 hover:bg-ink-800"
+                    onClick={() => openWorkspace(w)}
+                    title={`open ${w.layout.length} sessions`}
+                  >
+                    <Layers size={13} className="text-emerald-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-zinc-200 truncate">{w.name}</div>
+                      <div className="text-[10px] text-zinc-500">{w.layout.length} session{w.layout.length === 1 ? '' : 's'}</div>
+                    </div>
+                    <span
+                      className="opacity-0 group-hover/w:opacity-100 text-zinc-600 hover:text-red-400 p-1"
+                      title="Delete workspace"
+                      onClick={(e) => dropWorkspace(e, w)}
+                    >
+                      <Trash2 size={12} />
+                    </span>
+                  </div>
+                ))}
+                {workspaces && workspaces.workspaces.length === 0 && (
+                  <div className="px-3 py-4 text-xs text-zinc-600 text-center">
+                    no workspaces yet — open the tabs you want together, then save them above
+                  </div>
+                )}
+              </div>
+            )}
+            {sideView === 'groups' && pinned.length > 0 && (
               <div>
                 <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-amber-500">
                   <Star size={11} className="fill-amber-500" /> Pinned
@@ -499,15 +627,7 @@ export default function Sessions() {
                 {pinned.map(renderHost)}
               </div>
             )}
-            {recent.length > 0 && (
-              <div>
-                <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-                  <Clock size={11} /> Recent
-                </div>
-                {recent.map(renderHost)}
-              </div>
-            )}
-            {groups.map(([folder, list]) => (
+            {sideView === 'groups' && groups.map(([folder, list]) => (
               <div key={folder}>
                 <button
                   className="group/hdr flex items-center gap-1.5 w-full px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"

@@ -108,6 +108,7 @@ app.use('/api/playbooks', requireAuth, requireWrite, playbookRoutes);
 app.use('/api/vault', requireAuth, requireWrite, backupRoutes);
 app.use('/api/webhooks', requireAuth, requireWrite, webhookRoutes);
 app.use('/api/tokens', requireAuth, requireWrite, tokenRoutes);
+app.use('/api/workspaces', requireAuth, requireWrite, require('./routes/workspaces'));
 app.use('/api/admin', requireAuth, requireWrite, adminRoutes);
 // Public read-only metadata for share links (token in path is the credential).
 app.use('/api/public/share', sharePublicRoutes);

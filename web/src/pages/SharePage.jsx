@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { CanvasAddon } from '@xterm/addon-canvas';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal as TermIcon, Eye, MousePointer2, Clock } from 'lucide-react';
 import { api } from '../api';
@@ -35,6 +37,16 @@ export default function SharePage() {
         term.loadAddon(fit);
         term.loadAddon(new WebLinksAddon());
         term.open(containerRef.current);
+        try {
+          const gl = new WebglAddon();
+          gl.onContextLoss(() => {
+            try { gl.dispose(); } catch {}
+            try { term.loadAddon(new CanvasAddon()); } catch {}
+          });
+          term.loadAddon(gl);
+        } catch {
+          try { term.loadAddon(new CanvasAddon()); } catch {}
+        }
         fit.fit();
         ro = new ResizeObserver(() => {
           try {

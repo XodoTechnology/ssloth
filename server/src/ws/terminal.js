@@ -247,7 +247,7 @@ function handleTerminalWs(ws, req, user) {
     audit(user, 'ssh.connect', spec.label, req);
     if (spec.hostId) {
       try {
-        db.prepare('UPDATE hosts SET last_used_at = unixepoch() WHERE id = ?').run(spec.hostId);
+        db.prepare('UPDATE hosts SET last_used_at = unixepoch(), use_count = use_count + 1 WHERE id = ?').run(spec.hostId);
       } catch {}
     }
     conn.shell(

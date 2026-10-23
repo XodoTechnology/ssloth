@@ -176,6 +176,7 @@ ensureColumn('playbooks', 'schedule_host_id', 'schedule_host_id INTEGER REFERENC
 ensureColumn('playbooks', 'schedule_enabled', 'schedule_enabled INTEGER NOT NULL DEFAULT 0');
 ensureColumn('playbooks', 'next_run_at', 'next_run_at INTEGER');
 ensureColumn('playbooks', 'last_run_at', 'last_run_at INTEGER');
+ensureColumn('hosts', 'use_count', 'use_count INTEGER NOT NULL DEFAULT 0');
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS playbook_runs (
@@ -235,6 +236,15 @@ CREATE TABLE IF NOT EXISTS quick_history (
   ts       INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS idx_quick_user ON quick_history(user_id, ts);
+
+CREATE TABLE IF NOT EXISTS workspaces (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  layout     TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
 `);
 
 function audit(user, action, detail, req) {

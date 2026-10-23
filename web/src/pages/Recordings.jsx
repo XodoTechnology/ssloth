@@ -5,6 +5,8 @@ import { useStore } from '../store';
 import Modal from '../components/Modal';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { CanvasAddon } from '@xterm/addon-canvas';
 import '@xterm/xterm/css/xterm.css';
 
 export default function Recordings() {
@@ -164,6 +166,16 @@ function CastPlayer({ rec, startT, onClose }) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(ref.current);
+    try {
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => {
+        try { gl.dispose(); } catch {}
+        try { term.loadAddon(new CanvasAddon()); } catch {}
+      });
+      term.loadAddon(gl);
+    } catch {
+      try { term.loadAddon(new CanvasAddon()); } catch {}
+    }
     fit.fit();
     termRef.current = term;
 
