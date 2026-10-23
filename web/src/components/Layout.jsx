@@ -31,6 +31,13 @@ const NAV = [
 export default function Layout() {
   const user = useStore((s) => s.user);
   const setUser = useStore((s) => s.setUser);
+  const version = useStore((s) => s.version);
+  const commit = useStore((s) => s.commit);
+  const buildDate = useStore((s) => s.buildDate);
+  const versionStr =
+    `v${version || '?'}` +
+    (commit ? `+${commit}` : '') +
+    (buildDate ? ` · ${buildDate}` : '');
   const navigate = useNavigate();
 
   // Global tab shortcuts: Ctrl+Shift+[ / ] cycle, Ctrl+Shift+X closes.
@@ -95,6 +102,9 @@ export default function Layout() {
             <div className="text-sm text-zinc-200 truncate">{user?.username}</div>
             <div className="text-[11px] text-zinc-500">
               {user?.role === 'viewer' ? 'viewer (read-only)' : user?.is_admin ? 'administrator' : 'user'}
+            </div>
+            <div className="text-[10px] text-zinc-600 font-mono" title="version · commit · build date">
+              {versionStr}
             </div>
           </div>
           <div className="flex items-center">

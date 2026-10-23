@@ -121,6 +121,16 @@ async function main() {
     fs.unlinkSync(tgzN);
   }
 
+  // 6. build provenance — shown in-app (About dialog + footer)
+  const info = {
+    version: require(path.join(__dirname, 'package.json')).version,
+    commit: execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim(),
+    buildDate: new Date().toISOString().slice(0, 10),
+    platform: PLATFORM,
+    arch: ARCH,
+  };
+  fs.writeFileSync(path.join(STAGE, 'server', 'build-info.json'), JSON.stringify(info, null, 2));
+
   console.log(`\nstaged under desktop/stage (${PLATFORM}/${ARCH})`);
 }
 

@@ -4,6 +4,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const QRCode = require('qrcode');
 const { db, audit } = require('../db');
+const buildInfo = require('../buildinfo');
 const {
   hashPassword,
   verifyPassword,
@@ -58,6 +59,9 @@ router.get('/state', (req, res) => {
     user: user ? publicUser(user) : null,
     desktop: DESKTOP,
     pin_set: DESKTOP && !!db.prepare('SELECT COUNT(*) AS c FROM users WHERE pin_hash IS NOT NULL').get().c,
+    version: buildInfo.version,
+    commit: buildInfo.commit,
+    build_date: buildInfo.buildDate,
   });
 });
 

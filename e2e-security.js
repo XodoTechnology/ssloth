@@ -5,7 +5,7 @@
 // logout teardown.
 const crypto = require('crypto');
 const BASE = 'http://localhost:8089';
-const WebSocket = require('/root/vscode/ssloth/server/node_modules/ws');
+const WebSocket = require('./server/node_modules/ws');
 const net = require('net');
 
 // ---- helpers ----

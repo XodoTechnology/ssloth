@@ -8,7 +8,7 @@ const net = require('net');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const BASE = 'http://localhost:8089';
-const WebSocket = require('/root/vscode/ssloth/server/node_modules/ws');
+const WebSocket = require('./server/node_modules/ws');
 
 function ctx() {
   let cookie = '';
@@ -225,7 +225,7 @@ function wsTerm(cookie, firstMsg, opts, path = '/ws/terminal') {
   // ================= key auth + agent forwarding =================
   // generate a keypair via ssh2 (returns OpenSSH-format .public/.private),
   // install pubkey into the container, save credential
-  const ssh2 = require('/root/vscode/ssloth/server/node_modules/ssh2');
+  const ssh2 = require('./server/node_modules/ssh2');
   const kp = ssh2.utils.generateKeyPairSync('ed25519');
   const pubLine = `${kp.public.toString().trim()} e2e-agent`;
   const privPem = kp.private.toString();

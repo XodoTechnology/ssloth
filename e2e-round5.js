@@ -1,7 +1,7 @@
 // E2E round 5: persistent sessions, playbooks, health, multi-hop, socks5,
 // sftp read/write, shared hosts.
 const BASE = 'http://localhost:8089';
-const WebSocket = require('/root/vscode/ssloth/server/node_modules/ws');
+const WebSocket = require('./server/node_modules/ws');
 let cookie = '';
 
 async function api(path, opts = {}) {

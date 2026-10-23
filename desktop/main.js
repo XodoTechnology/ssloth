@@ -20,6 +20,38 @@ let mainWindow = null;
 let serverUrl = null;
 let checkForUpdates = () => {};
 
+function buildInfo() {
+  const res = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
+  try {
+    const j = JSON.parse(
+      fs.readFileSync(path.join(res, 'server', 'build-info.json'), 'utf8')
+    );
+    if (j.version) return j;
+  } catch {}
+  let commit = 'dev';
+  try {
+    commit = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+    }).stdout.trim();
+  } catch {}
+  return { version: app.getVersion(), commit, buildDate: null };
+}
+
+function showAbout() {
+  const b = buildInfo();
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'About ssloth',
+    message: `ssloth ${b.version}${b.commit ? `+${b.commit}` : ''}`,
+    detail:
+      `Built: ${b.buildDate || 'dev checkout'}\n` +
+      `Platform: ${process.platform}/${process.arch}\n` +
+      `Data folder: ${app.getPath('userData')}`,
+    buttons: ['OK'],
+  });
+}
+
 // Update events get appended here so failures are diagnosable after the fact.
 const updateLog = () =>
   fs.createWriteStream(path.join(app.getPath('userData'), 'update.log'), { flags: 'a' });
@@ -84,6 +116,8 @@ function installMenu() {
             label: 'Check for Updates…',
             click: () => checkForUpdates(),
           },
+          { type: 'separator' },
+          { label: 'About ssloth', click: showAbout },
           { type: 'separator' },
           { role: 'quit' },
         ],

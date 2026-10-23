@@ -31,6 +31,9 @@ export default function App() {
           setupRequired: s.setup_required,
           desktop: !!s.desktop,
           pinSet: !!s.pin_set,
+          version: s.version,
+          commit: s.commit,
+          buildDate: s.build_date,
           booted: true,
         });
         setUser(s.authenticated ? s.user : null);
