@@ -36,6 +36,10 @@ function startServer() {
     const logFile = path.join(app.getPath('userData'), 'server.log');
     const log = fs.createWriteStream(logFile, { flags: 'a' });
 
+    if (node && !fs.existsSync(node)) {
+      return reject(new Error(`bundled runtime missing at ${node} — the install is incomplete; please reinstall or use the portable zip`));
+    }
+
     let bin = node || 'node';
     const args = [entry];
     const extraEnv = {};
