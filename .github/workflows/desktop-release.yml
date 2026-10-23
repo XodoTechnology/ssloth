@@ -5,6 +5,9 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+permissions:
+  contents: write # create GitHub Releases on tag pushes
+
 jobs:
   build:
     strategy:
@@ -39,9 +42,14 @@ jobs:
         run: npm --prefix desktop ci
       - name: Stage runtime + build packages
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tag pushes publish straight to a GitHub Release (installer +
+          # latest.yml for electron-updater); manual runs stay artifact-only.
+          PUBLISH_FLAG: ${{ startsWith(github.ref, 'refs/tags/') && '--publish always' || '--publish never' }}
         run: |
           node prepare-standalone.js --platform ${{ matrix.platform }}
-          npx electron-builder ${{ matrix.builder }} --publish never
+          npx electron-builder ${{ matrix.builder }} $PUBLISH_FLAG
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -52,4 +60,5 @@ jobs:
             desktop/release/*.deb
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.yml
           if-no-files-found: error

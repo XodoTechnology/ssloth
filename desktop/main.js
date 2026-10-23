@@ -10,7 +10,7 @@
 // standard Node prebuilds — no Electron ABI rebuild needed. In dev (`npm
 // run dev`) it just uses the `node` on PATH.
 
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +18,94 @@ const path = require('path');
 let serverProc = null;
 let mainWindow = null;
 let serverUrl = null;
+let checkForUpdates = () => {};
+
+// Update events get appended here so failures are diagnosable after the fact.
+const updateLog = () =>
+  fs.createWriteStream(path.join(app.getPath('userData'), 'update.log'), { flags: 'a' });
+
+function initUpdater() {
+  // Only packaged builds self-update; dev mode has no feed to check.
+  if (!app.isPackaged) return;
+  let autoUpdater;
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+  } catch {
+    return; // dep absent (dev checkout / hand-copied resources)
+  }
+  const log = updateLog();
+  const write = (m) => log.write(`${new Date().toISOString()} ${m}\n`);
+  autoUpdater.logger = { info: write, warn: write, error: write, debug: () => {} };
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-downloaded', (info) => {
+    write(`update ${info.version} downloaded`);
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Update ready',
+        message: `ssloth ${info.version} has been downloaded.`,
+        detail: 'Restart now to install it, or it will be applied next time you quit.',
+        buttons: ['Restart now', 'Later'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+  autoUpdater.on('error', (e) => write(`update error: ${e.message}`));
+
+  // Silent background check on launch; failures (offline, private repo) are logged only.
+  autoUpdater.checkForUpdates().catch((e) => write(`check failed: ${e.message}`));
+
+  checkForUpdates = () =>
+    autoUpdater
+      .checkForUpdates()
+      .then((r) => {
+        if (!r?.updateInfo || r.updateInfo.version === app.getVersion()) {
+          dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            message: `ssloth ${app.getVersion()} is up to date.`,
+          });
+        }
+      })
+      .catch((e) =>
+        dialog.showErrorBox('Update check failed', `${e.message}\n\nSee update.log in the data folder.`)
+      );
+}
+
+function installMenu() {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'ssloth',
+        submenu: [
+          {
+            label: 'Check for Updates…',
+            click: () => checkForUpdates(),
+          },
+          { type: 'separator' },
+          { role: 'quit' },
+        ],
+      },
+      {
+        label: 'Edit',
+        role: 'editMenu',
+      },
+      {
+        label: 'View',
+        submenu: [
+          { role: 'reload' },
+          { role: 'toggleDevTools' },
+          { type: 'separator' },
+          { role: 'resetZoom' },
+          { role: 'zoomIn' },
+          { role: 'zoomOut' },
+        ],
+      },
+    ])
+  );
+}
 
 function serverPaths() {
   const res = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..');
@@ -162,6 +250,8 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    installMenu();
+    initUpdater();
     try {
       const url = await startServer();
       createWindow(url);

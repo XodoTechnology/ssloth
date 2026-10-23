@@ -73,6 +73,16 @@
       "perMachine": false,
       "allowElevation": false,
       "shortcutName": "ssloth"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "XodoTechnology",
+        "repo": "ssloth"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }
