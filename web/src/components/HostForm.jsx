@@ -108,6 +108,7 @@ export default function HostForm({ host, onClose, onSaved }) {
                   ...f,
                   protocol: p,
                   port: !host && f.port === 22 && p === 'telnet' ? 23 : !host && f.port === 23 && p === 'ssh' ? 22 : f.port,
+                  auth_type: p === 'bmc' && f.auth_type === 'ask' ? 'credential' : f.auth_type,
                 }));
               }}
             >
@@ -125,6 +126,13 @@ export default function HostForm({ host, onClose, onSaved }) {
             <input className="input font-mono" value={form.username} onChange={set('username')} placeholder="root" />
           </div>
         </div>
+
+        {form.protocol === 'bmc' && (
+          <div className="col-span-2 rounded-md border border-sky-800/60 bg-sky-950/30 px-3 py-2 text-[11px] text-sky-300">
+            BMC family, console and management ports are auto-detected — the port field is unused.
+            Pick a password credential (key credentials don't apply to BMC login).
+          </div>
+        )}
 
         {form.protocol === 'telnet' && (
           <div className="col-span-2 rounded-md border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-300">
@@ -144,14 +152,14 @@ export default function HostForm({ host, onClose, onSaved }) {
           />
         </div>
 
-        {form.protocol === 'ssh' && (
+        {(form.protocol === 'ssh' || form.protocol === 'bmc') && (
         <>
         <div>
           <label className="label">Authentication</label>
           <select className="input" value={form.auth_type} onChange={set('auth_type')}>
             <option value="credential">Saved credential / key</option>
             <option value="password">Inline password</option>
-            <option value="ask">Ask at connect (never stored)</option>
+            {form.protocol === 'ssh' && <option value="ask">Ask at connect (never stored)</option>}
           </select>
         </div>
         <div>
