@@ -20,6 +20,7 @@ import { useStore } from '../store';
 import Modal from './Modal';
 import SftpPanel from './SftpPanel';
 import TerminalPane from './TerminalPane';
+import KvmPane from './KvmPane';
 
 export default function TerminalView({ tab, active }) {
   const [panes, setPanes] = useState([{ id: 'p1', target: tab.target }]);
@@ -315,14 +316,25 @@ export default function TerminalView({ tab, active }) {
         <div className={`flex-1 flex min-w-0 min-h-0 ${panes.length > 1 ? 'gap-px bg-ink-700' : ''}`}>
           {panes.map((p) => (
             <div key={p.id} className="flex-1 min-w-0 relative bg-ink-950">
-              <TerminalPane
-                tab={tab}
-                pane={p}
-                active={active}
-                focused={p.id === activePaneId}
-                onFocus={() => setActivePane(tab.id, p.id)}
-                onPaneState={setPaneState}
-              />
+              {useStore.getState().hosts.find((h) => h.id === p.target?.hostId)?.protocol === 'bmc' ? (
+                <KvmPane
+                  tab={tab}
+                  pane={p}
+                  active={active}
+                  focused={p.id === activePaneId}
+                  onFocus={() => setActivePane(tab.id, p.id)}
+                  onPaneState={setPaneState}
+                />
+              ) : (
+                <TerminalPane
+                  tab={tab}
+                  pane={p}
+                  active={active}
+                  focused={p.id === activePaneId}
+                  onFocus={() => setActivePane(tab.id, p.id)}
+                  onPaneState={setPaneState}
+                />
+              )}
               {panes.length > 1 && (
                 <button
                   className="absolute top-1.5 right-1.5 z-10 p-1 rounded bg-ink-800/80 text-zinc-500 hover:text-red-400"

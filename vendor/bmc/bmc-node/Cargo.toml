@@ -1,0 +1,18 @@
+[package]
+name = "bmc-node"
+version.workspace = true
+edition.workspace = true
+description = "napi binding embedding bmc-core inside ssloth's Node server"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bmc-core = { path = "../bmc-core" }
+napi.workspace = true
+napi-derive.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+napi-build = "2"

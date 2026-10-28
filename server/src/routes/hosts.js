@@ -14,7 +14,7 @@ const router = express.Router();
 const { stopTunnelsForHost } = require('./tunnels');
 
 const AUTH_TYPES = new Set(['credential', 'password', 'ask']);
-const PROTOCOLS = new Set(['ssh', 'telnet']);
+const PROTOCOLS = new Set(['ssh', 'telnet', 'bmc']);
 
 function cleanHostInput(body, { partial = false } = {}) {
   const out = {};

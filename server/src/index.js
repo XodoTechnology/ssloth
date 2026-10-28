@@ -37,6 +37,7 @@ const webhookRoutes = require('./routes/webhooks');
 const tokenRoutes = require('./routes/tokens');
 const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./routes/shares');
 const { handleTelnetWs } = require('./ws/telnet');
+const { handleKvmWs } = require('./ws/kvm');
 const { startScheduler } = require('./ssh/runner');
 const { startSweeper } = require('./health');
 const { requireWrite } = require('./auth');
@@ -157,7 +158,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
   const shareMatch = url.pathname.match(/^\/ws\/share\/([A-Za-z0-9_-]{20,128})$/);
-  if (url.pathname !== '/ws/terminal' && url.pathname !== '/ws/telnet' && !shareMatch) {
+  if (url.pathname !== '/ws/terminal' && url.pathname !== '/ws/telnet' && url.pathname !== '/ws/kvm' && !shareMatch) {
     socket.destroy();
     return;
   }
@@ -185,6 +186,7 @@ server.on('upgrade', (req, socket, head) => {
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
     if (url.pathname === '/ws/telnet') handleTelnetWs(ws, req, user);
+    else if (url.pathname === '/ws/kvm') handleKvmWs(ws, req, user);
     else handleTerminalWs(ws, req, user);
   });
 });

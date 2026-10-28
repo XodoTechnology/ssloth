@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = ["bmc-core", "bmc-node"]
+
+# Vendored from bmc-kvm (upstream archived). bmc-core is maintained here now;
+# bmc-node is ours — the napi binding that embeds it inside ssloth's server.
+[workspace.package]
+version = "0.7.1"
+edition = "2021"
+
+[workspace.dependencies]
+native-tls = "0.2"
+openssl = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+russh = { version = "0.64", default-features = false, features = ["ring", "rsa"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+
+napi = { version = "2", features = ["napi8", "serde-json", "async"] }
+napi-derive = "2"
+
+[profile.release]
+opt-level = 3

@@ -1,0 +1,11 @@
+# Checked by both mocks: console/mock.rs (cargo test) and scripts/frames-check.mjs
+# (npm run check), so the Rust and TypeScript frames cannot drift apart.
+# header: header and rect table of a 40x34 RGB5551 frame, seq 7, with one dirty
+# pixel in tile (0,0) and one in the partial tile (1,1); frame_fnv covers the whole
+# frame. The *_fnv lines are the mock screen for compute-01: boot at 1000 ms, login
+# at 4200 ms with "root" typed, heavy motion at 4200 ms. FNV-1a, 32-bit.
+header 4b564d460100020007000000280022000000000020002000010000000008000020002000080002000100000020000000
+frame_fnv 68df2971
+boot_fnv c8e43745
+login_fnv 6a30a665
+heavy_fnv cd20a0bb

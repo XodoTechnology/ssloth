@@ -29,6 +29,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
   const reconnectSeq = useRef(0);
   const mountedRef = useRef(true);
   const intentionalRef = useRef(false);
+  const fatalRef = useRef(false); // user-action-required failure — don't auto-retry
   const retryRef = useRef({ attempt: 0, timer: null });
   const reattachRef = useRef(false);
 
@@ -160,6 +161,8 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
       },
       reconnect: () => {
         intentionalRef.current = false;
+        fatalRef.current = false;
+        sessionRef.current = null; // fresh dial — old session may be dead
         clearTimeout(retryRef.current.timer);
         try { wsRef.current?.close(); } catch {}
         open();
@@ -291,6 +294,13 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
           setPaneState({ statusMsg: `verifying host key for ${msg.hostname}` });
           setHostkey(msg);
           break;
+        case 'hostkey_mismatch':
+          // changed server key — surface as a hard stop, never auto-retry
+          fatalRef.current = true;
+          sessionRef.current = null;
+          reattachRef.current = false;
+          setPaneState({ status: 'error', statusMsg: msg.message || 'HOST KEY CHANGED', sessionId: null, mismatch: msg });
+          break;
         case 'auth_request':
           setPassword('');
           setAuthPrompt({ reason: msg.reason });
@@ -341,6 +351,11 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     ws.onclose = () => {
       clearInterval(pingTimer);
       if (reconnectSeq.current !== seq) return;
+      if (fatalRef.current) {
+        // mismatch/fatal — stay on the error, don't loop connect attempts
+        setPaneState({ status: 'error', sessionId: null, recording: false });
+        return;
+      }
       if (!mountedRef.current || intentionalRef.current) {
         setPaneState({
           status: stateRef.current.status === 'error' ? 'error' : 'closed',

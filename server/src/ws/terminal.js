@@ -250,8 +250,12 @@ function handleTerminalWs(ws, req, user) {
             const hop = err.hopSpec || spec;
             audit(user, 'ssh.hostkey_mismatch', `${hop.hostname}:${hop.port} saw ${err.fingerprint}, expected ${err.expected}`, req);
             send({
-              type: 'status',
+              type: 'hostkey_mismatch',
               state: 'error',
+              hostname: hop.hostname,
+              port: hop.port,
+              fingerprint: err.fingerprint,
+              expected: err.expected,
               message:
                 `HOST KEY CHANGED for ${hop.hostname}:${hop.port}! ` +
                 `Expected ${err.expected}, got ${err.fingerprint}. ` +

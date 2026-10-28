@@ -113,6 +113,7 @@ export default function HostForm({ host, onClose, onSaved }) {
             >
               <option value="ssh">SSH</option>
               <option value="telnet">Telnet</option>
+              <option value="bmc">BMC / KVM</option>
             </select>
           </div>
           <div>

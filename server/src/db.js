@@ -166,7 +166,7 @@ ensureColumn('users', 'totp_last_step', 'totp_last_step INTEGER NOT NULL DEFAULT
 ensureColumn('hosts', 'shared', 'shared INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tunnels', 'type', "type TEXT NOT NULL DEFAULT 'local' CHECK (type IN ('local','dynamic'))");
 // --- round: importer/portal feature set ---
-ensureColumn('hosts', 'protocol', "protocol TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh','telnet'))");
+ensureColumn('hosts', 'protocol', "protocol TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh','telnet','bmc'))");
 ensureColumn('hosts', 'mac', "mac TEXT NOT NULL DEFAULT ''");
 ensureColumn('hosts', 'agent_forward', 'agent_forward INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'role', "role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','viewer'))");

@@ -1,0 +1,27 @@
+[package]
+name = "bmc-core"
+version.workspace = true
+edition.workspace = true
+description = "Protocol core of bmc-kvm: BMC consoles, virtual media, power and IPMI"
+
+[dependencies]
+native-tls.workspace = true
+openssl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+russh.workspace = true
+tokio.workspace = true
+
+# native-tls uses SChannel on Windows and Security.framework on macOS, so there
+# is no system OpenSSL to borrow and nothing to link against. Build one in for
+# those targets rather than drop the Avocent family there — its BMC needs an
+# OpenSSL cipher string, which neither platform TLS stack can express.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+openssl = { workspace = true, features = ["vendored"] }
+
+[features]
+# The fake SSH server, config isolation and the other test hooks, for the
+# tests of crates built on this one (the GUI's route and connect tests). A
+# dev-dependency feature, so no shipped build carries them.
+testing = []

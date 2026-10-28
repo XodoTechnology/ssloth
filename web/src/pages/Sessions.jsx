@@ -46,6 +46,7 @@ export default function Sessions() {
   const [collapsed, setCollapsed] = useState({});
   const [healthFor, setHealthFor] = useState(null); // hostId -> popover sparkline
   const [healthData, setHealthData] = useState({});
+  const [tabMenu, setTabMenu] = useState(null); // {x, y, tab} right-click menu
   const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
   const [workspaces, setWorkspaces] = useState(null);
 
@@ -686,6 +687,10 @@ export default function Sessions() {
             <div
               key={t.id}
               onClick={() => setActiveTab(t.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabMenu({ x: e.clientX, y: e.clientY, tab: t });
+              }}
               className={`group flex items-center gap-2 rounded-t-md px-3 h-8 mt-2 cursor-pointer text-sm whitespace-nowrap border border-b-0 ${
                 t.id === activeTabId
                   ? 'bg-ink-950 border-ink-700 text-zinc-100'
@@ -750,6 +755,48 @@ export default function Sessions() {
           )}
         </div>
       </div>
+
+      {tabMenu && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={() => setTabMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setTabMenu(null);
+          }}
+        >
+          <div
+            className="absolute rounded-md border border-ink-700 bg-ink-900 py-1 text-sm shadow-xl min-w-[150px]"
+            style={{ left: tabMenu.x, top: tabMenu.y }}
+          >
+            <button
+              className="w-full px-3 py-1.5 text-left hover:bg-ink-800"
+              onClick={() => {
+                openTab(tabMenu.tab.target, tabMenu.tab.title, tabMenu.tab.color);
+                setTabMenu(null);
+              }}
+            >
+              Duplicate tab
+            </button>
+            <button
+              className="w-full px-3 py-1.5 text-left hover:bg-ink-800"
+              onClick={() => {
+                const st = useStore.getState();
+                for (const [key, sender] of Object.entries(st.paneSenders)) {
+                  if (key.startsWith(tabMenu.tab.id + ':')) {
+                    try {
+                      sender.reconnect?.();
+                    } catch {}
+                  }
+                }
+                setTabMenu(null);
+              }}
+            >
+              Reconnect
+            </button>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <HostForm
