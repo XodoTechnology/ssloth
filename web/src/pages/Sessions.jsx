@@ -47,6 +47,7 @@ export default function Sessions() {
   const [healthFor, setHealthFor] = useState(null); // hostId -> popover sparkline
   const [healthData, setHealthData] = useState({});
   const [tabMenu, setTabMenu] = useState(null); // {x, y, tab} right-click menu
+  const [powerMenu, setPowerMenu] = useState(null); // {x, y, host} bmc power menu
   const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
   const [workspaces, setWorkspaces] = useState(null);
 
@@ -188,6 +189,16 @@ export default function Sessions() {
     try {
       await api(`/api/hosts/${h.id}/wol`, { method: 'POST' });
       toast(`magic packet sent to ${h.name}`, 'success');
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
+  const bmcPower = async (h, action, path = 'power') => {
+    setPowerMenu(null);
+    try {
+      const r = await api(`/api/hosts/${h.id}/${path}`, { method: 'POST', body: { action } });
+      toast(r.message || `${action} sent to ${h.name}`, 'success');
     } catch (e2) {
       toast(e2.message, 'error');
     }
@@ -382,6 +393,18 @@ export default function Sessions() {
             onClick={(e) => wake(h, e)}
           >
             <Power size={13} />
+          </button>
+        )}
+        {h.protocol === 'bmc' && !readOnly && (
+          <button
+            className="p-1 text-zinc-500 hover:text-rose-400"
+            title="BMC power / management"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPowerMenu({ x: e.clientX, y: e.clientY, host: h });
+            }}
+          >
+            <Zap size={13} />
           </button>
         )}
         {h.owned !== false && !readOnly && (
@@ -793,6 +816,40 @@ export default function Sessions() {
               }}
             >
               Reconnect
+            </button>
+          </div>
+        </div>
+      )}
+
+      {powerMenu && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={() => setPowerMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setPowerMenu(null);
+          }}
+        >
+          <div
+            className="absolute rounded-md border border-ink-700 bg-ink-900 py-1 text-sm shadow-xl min-w-[150px]"
+            style={{ left: powerMenu.x, top: powerMenu.y }}
+          >
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-zinc-600">chassis power</div>
+            {['on', 'off', 'reset', 'soft', 'cycle'].map((a) => (
+              <button
+                key={a}
+                className="w-full px-3 py-1.5 text-left hover:bg-ink-800"
+                onClick={() => bmcPower(powerMenu.host, a)}
+              >
+                Power {a}
+              </button>
+            ))}
+            <div className="my-1 border-t border-ink-800" />
+            <button
+              className="w-full px-3 py-1.5 text-left text-rose-400 hover:bg-ink-800"
+              onClick={() => bmcPower(powerMenu.host, null, 'mc-reset')}
+            >
+              Reset BMC
             </button>
           </div>
         </div>

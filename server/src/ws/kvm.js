@@ -17,21 +17,11 @@
 //   {type:'status', state:'connecting'|'ready'|'error'|'closed', message}
 //   {type:'ready', sessionId, title, family}
 
-const path = require('path');
 const { audit } = require('../db');
 const { resolveConnectSpec } = require('../ssh/manager');
 
-// The vendored bmc-core napi addon. Built per-platform by the Rust build
-// (vendor/bmc); a missing or wrong-arch binary degrades this endpoint to a
-// clear error instead of taking the whole server down at require time.
-let bmc = null;
-let bmcError = null;
-try {
-  bmc = require(path.join(__dirname, '..', '..', 'native', 'bmc.node'));
-} catch (e) {
-  bmcError = e.message;
-  console.warn('[ssloth] bmc addon unavailable:', e.message);
-}
+// The vendored bmc-core napi addon, shared with the BMC host-command routes.
+const { bmc, bmcError, applyRoutes, chainToRoutes } = require('../bmc');
 
 // Persistent sessions, same model as ssh: detach keeps the console alive.
 const sessions = new Map(); // id -> {id, bmc, ws, label, createdAt}
@@ -39,23 +29,6 @@ let seq = 0;
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
-}
-
-// Map a resolved ssloth bastion chain onto bmc RouteSpec hops (dial order:
-// outermost first — buildChain already returns that order).
-function chainToRoutes(hops) {
-  return hops.map((h) => ({
-    name: h.label || `${h.hostname}:${h.port}`,
-    kind: 'ssh',
-    host: h.hostname,
-    port: h.port || 22,
-    user: h.username || '',
-    auth: h.privateKey ? 'key' : h.password ? 'password' : 'agent',
-    keyFile: h.__keyFile || null,
-    secret: h.password || h.passphrase || null,
-    hostKey: null,
-    via: null,
-  }));
 }
 
 function handleKvmWs(ws, req, user) {
@@ -139,9 +112,7 @@ function handleKvmWs(ws, req, user) {
 
     // Bastion chain → bmc route table (installed globally by addr).
     try {
-      const hops = buildHops(spec);
-      bmc.clearRoute(spec.hostname);
-      if (hops.length) bmc.setRoute(spec.hostname, chainToRoutes(hops));
+      applyRoutes(resolveConnectSpec, user.id, spec);
     } catch (e) {
       send(ws, { type: 'status', state: 'error', message: 'route setup failed: ' + e.message });
       return;
@@ -190,23 +161,6 @@ function handleKvmWs(ws, req, user) {
         send(out, { type: 'status', state: 'notice', message: body });
       }
     }
-  }
-
-  // Walk the saved bastion chain (same rule as ssh: host.jumpHostId → hops,
-  // outermost first).
-  function buildHops(spec) {
-    const hops = [];
-    const seen = new Set(spec.hostId ? [spec.hostId] : []);
-    let cursor = spec;
-    while (cursor.jumpHostId) {
-      if (hops.length >= 8) throw new Error('bastion chain too long');
-      const hop = resolveConnectSpec(user.id, { hostId: cursor.jumpHostId });
-      if (seen.has(hop.hostId)) throw new Error('bastion chain contains a cycle');
-      seen.add(hop.hostId);
-      hops.push(hop);
-      cursor = hop;
-    }
-    return hops.reverse();
   }
 
   function kill(s) {

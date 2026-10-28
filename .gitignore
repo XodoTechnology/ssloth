@@ -7,3 +7,4 @@ data/
 .DS_Store
 ssloth-win-x64.zip
 desktop/stage/
+vendor/bmc/target/

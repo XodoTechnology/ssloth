@@ -6,7 +6,8 @@ const dgram = require('dgram');
 const { db } = require('../db');
 const { encryptSecret } = require('../crypto');
 const { auditReq } = require('../auth');
-const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey } = require('../ssh/manager');
+const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey, resolveConnectSpec } = require('../ssh/manager');
+const { bmc, bmcError, applyRoutes } = require('../bmc');
 const { scanHostKey } = require('../ssh/keyscan');
 const { getHealthHistory, latestHealth } = require('../health');
 
@@ -362,6 +363,77 @@ router.get('/:id/health', (req, res) => {
   const own = db.prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(req.params.id, req.user.id);
   if (!own) return res.status(404).json({ error: 'not found' });
   res.json({ history: getHealthHistory(own.id), current: latestHealth(own.id) });
+});
+
+// ---- BMC host commands (power / MC reset / SEL / sensors / detect) ----
+// Resolved through the vault like a connect; bastion chains install into the
+// addon's route table before the call. These are blocking IPMI/HTTP calls
+// inside the addon — napi runs them off the event loop, we await them here.
+
+function bmcSpec(req) {
+  const spec = resolveConnectSpec(req.user.id, { hostId: parseInt(req.params.id, 10) });
+  applyRoutes(resolveConnectSpec, req.user.id, spec);
+  return { host: spec.hostname, user: spec.username || '', pass: spec.password || '' };
+}
+
+const BMC_ACTIONS = new Set(['on', 'off', 'reset', 'cycle', 'soft']);
+
+router.post('/:id/power', async (req, res) => {
+  if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  const { action, family } = req.body || {};
+  if (!BMC_ACTIONS.has(action)) return res.status(400).json({ error: 'action must be on|off|reset|cycle|soft' });
+  try {
+    const spec = bmcSpec(req);
+    const message =
+      action === 'cycle'
+        ? await bmc.ipmiPower(spec, action)
+        : await bmc.powerCmd(spec, action, family || null);
+    auditReq(req, 'bmc.power', `${spec.host} ${action}`);
+    res.json({ ok: true, message });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/:id/mc-reset', async (req, res) => {
+  if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  try {
+    const spec = bmcSpec(req);
+    const message = await bmc.bmcReset(spec);
+    auditReq(req, 'bmc.mc_reset', spec.host);
+    res.json({ ok: true, message });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.get('/:id/sel', async (req, res) => {
+  if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  try {
+    res.json(JSON.parse(await bmc.readSel(bmcSpec(req))));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.get('/:id/sensors', async (req, res) => {
+  if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  try {
+    res.json(JSON.parse(await bmc.readSensors(bmcSpec(req))));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.get('/:id/bmc-detect', async (req, res) => {
+  if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  try {
+    const spec = resolveConnectSpec(req.user.id, { hostId: parseInt(req.params.id, 10) });
+    const [family, vendor] = String(await bmc.detectFamily(spec.hostname)).split(':');
+    res.json({ family, vendor });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 module.exports = router;

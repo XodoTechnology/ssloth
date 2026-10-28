@@ -14,7 +14,7 @@ use bmc_core::input::encoder::{Encode, FamilyEncoder};
 use bmc_core::input::Event as InputEvent;
 use bmc_core::jobs::Jobs;
 use bmc_core::routes::{Auth, Kind, Route};
-use bmc_core::net;
+use bmc_core::{event_log, families, ipmi, net, power};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
@@ -262,4 +262,225 @@ impl Drop for BmcSession {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+// ---- Host commands without a console: power / IPMI / SEL / sensors ----
+// Blocking network calls, so each is an AsyncTask the JS side awaits.
+
+fn family_from(s: &str) -> Option<families::Family> {
+    Some(match s.to_ascii_lowercase().as_str() {
+        "aten" => families::Family::Aten,
+        "quanta" => families::Family::Quanta,
+        "ilo4" => families::Family::Ilo4,
+        "idrac9" => families::Family::Idrac9,
+        "idrac8" => families::Family::Idrac8,
+        "spx" => families::Family::Spx,
+        "avocent" => families::Family::Avocent,
+        _ => return None,
+    })
+}
+
+/// action: "on" | "off" | "reset" | "soft" (IPMI adds "cycle").
+/// family empty/unknown → unauthenticated detect before sending.
+pub struct PowerTask {
+    host: String,
+    user: String,
+    pass: String,
+    family: Option<families::Family>,
+    action: String,
+}
+
+#[napi]
+impl Task for PowerTask {
+    type Output = String;
+    type JsValue = String;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let family = self
+            .family
+            .unwrap_or_else(|| families::detect(&self.host));
+        let code = match self.action.as_str() {
+            "off" => 0,
+            "on" => 1,
+            "reset" | "cycle" => 2,
+            _ => 3,
+        };
+        Ok(power::send_power(family, &self.host, &self.user, &self.pass, code))
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn power_cmd(spec: SessionSpec, action: String, family: Option<String>) -> AsyncTask<PowerTask> {
+    AsyncTask::new(PowerTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+        family: family.as_deref().and_then(family_from),
+        action,
+    })
+}
+
+/// Raw IPMI chassis control — works on every IPMI-capable family.
+pub struct IpmiPowerTask {
+    host: String,
+    user: String,
+    pass: String,
+    action: String,
+}
+
+#[napi]
+impl Task for IpmiPowerTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        ipmi::power(&self.host, &self.user, &self.pass, &self.action)
+            .map_err(|e| Error::from_reason(e.to_string()))
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn ipmi_power(spec: SessionSpec, action: String) -> AsyncTask<IpmiPowerTask> {
+    AsyncTask::new(IpmiPowerTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+        action,
+    })
+}
+
+/// Cold-reset the management controller itself (host power untouched).
+pub struct BmcResetTask {
+    host: String,
+    user: String,
+    pass: String,
+}
+
+#[napi]
+impl Task for BmcResetTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        Ok(power::reset_bmc(&self.host, &self.user, &self.pass))
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn bmc_reset(spec: SessionSpec) -> AsyncTask<BmcResetTask> {
+    AsyncTask::new(BmcResetTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+    })
+}
+
+/// System event log over IPMI → JSON [{id,created,source,severity,message}].
+pub struct SelTask {
+    host: String,
+    user: String,
+    pass: String,
+}
+
+#[napi]
+impl Task for SelTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        let log = event_log::ipmi(&self.host, &self.user, &self.pass)
+            .map_err(Error::from_reason)?;
+        let entries: Vec<_> = log
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id, "created": e.created, "source": e.source,
+                    "severity": e.severity, "message": e.message,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "source": log.source, "warnings": log.warnings, "entries": entries }).to_string())
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn read_sel(spec: SessionSpec) -> AsyncTask<SelTask> {
+    AsyncTask::new(SelTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+    })
+}
+
+/// Sensor readings over IPMI → JSON [{name,reading,units,status,thresholds}].
+pub struct SensorsTask {
+    host: String,
+    user: String,
+    pass: String,
+}
+
+#[napi]
+impl Task for SensorsTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        let s = event_log::ipmi_sensors(&self.host, &self.user, &self.pass)
+            .map_err(Error::from_reason)?;
+        let entries: Vec<_> = s
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.name, "reading": e.reading, "units": e.units,
+                    "status": e.status, "thresholds": e.thresholds,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "source": s.source, "warnings": s.warnings, "entries": entries }).to_string())
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn read_sensors(spec: SessionSpec) -> AsyncTask<SensorsTask> {
+    AsyncTask::new(SensorsTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+    })
+}
+
+/// Unauthenticated family detection (probes HTTP/ports; no login).
+pub struct DetectTask {
+    host: String,
+}
+
+#[napi]
+impl Task for DetectTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        let (family, vendor) = families::detect_vendor(&self.host);
+        Ok(format!("{family:?}:{vendor:?}"))
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn detect_family(host: String) -> AsyncTask<DetectTask> {
+    AsyncTask::new(DetectTask { host })
 }
