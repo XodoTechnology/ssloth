@@ -178,6 +178,55 @@ ensureColumn('playbooks', 'next_run_at', 'next_run_at INTEGER');
 ensureColumn('playbooks', 'last_run_at', 'last_run_at INTEGER');
 ensureColumn('hosts', 'use_count', 'use_count INTEGER NOT NULL DEFAULT 0');
 
+// DBs created before 'bmc' was a protocol carry a CHECK that rejects it, and
+// SQLite can't alter a CHECK in place — rebuild the table once if stale.
+{
+  const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='hosts'").get()?.sql || '';
+  if (ddl && !ddl.includes("'bmc'")) {
+    const cols = db.prepare('PRAGMA table_info(hosts)').all().map((c) => c.name);
+    db.pragma('foreign_keys = OFF');
+    db.transaction(() => {
+      db.exec(`CREATE TABLE hosts_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        hostname      TEXT NOT NULL,
+        port          INTEGER NOT NULL DEFAULT 22,
+        username      TEXT NOT NULL,
+        auth_type     TEXT NOT NULL DEFAULT 'credential'
+                      CHECK (auth_type IN ('credential','password','ask')),
+        credential_id INTEGER REFERENCES credentials(id) ON DELETE SET NULL,
+        password_enc  TEXT,
+        folder        TEXT NOT NULL DEFAULT '',
+        color         TEXT NOT NULL DEFAULT '',
+        notes         TEXT NOT NULL DEFAULT '',
+        keepalive     INTEGER NOT NULL DEFAULT 15,
+        created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+        jump_host_id  INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+        record        INTEGER NOT NULL DEFAULT 0,
+        pinned        INTEGER NOT NULL DEFAULT 0,
+        last_used_at  INTEGER,
+        region        TEXT NOT NULL DEFAULT '',
+        tags          TEXT NOT NULL DEFAULT '',
+        shared        INTEGER NOT NULL DEFAULT 0,
+        protocol      TEXT NOT NULL DEFAULT 'ssh'
+                      CHECK (protocol IN ('ssh','telnet','bmc')),
+        mac           TEXT NOT NULL DEFAULT '',
+        agent_forward INTEGER NOT NULL DEFAULT 0,
+        use_count     INTEGER NOT NULL DEFAULT 0
+      )`);
+      const inNew = new Set(db.prepare('PRAGMA table_info(hosts_new)').all().map((c) => c.name));
+      const common = cols.filter((c) => inNew.has(c));
+      db.exec(`INSERT INTO hosts_new (${common.join(',')}) SELECT ${common.join(',')} FROM hosts`);
+      db.exec('DROP TABLE hosts');
+      db.exec('ALTER TABLE hosts_new RENAME TO hosts');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts(user_id)');
+    })();
+    db.pragma('foreign_keys = ON');
+  }
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS playbook_runs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -52,7 +52,7 @@
     ],
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "linux": {
       "target": [
