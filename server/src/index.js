@@ -43,7 +43,10 @@ const { requireWrite } = require('./auth');
 
 const app = express();
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
+const trustProxy = process.env.TRUST_PROXY;
+if (trustProxy && trustProxy !== 'false' && trustProxy !== '0') {
+  app.set('trust proxy', trustProxy === 'true' ? true : trustProxy);
+}
 
 // gzip/deflate responses — the SPA bundle is ~600KB raw; over a WAN link
 // this is the difference between a snappy load and a multi-second stall.
