@@ -2,7 +2,7 @@
   "name": "ssloth-desktop",
   "private": true,
   "version": "0.1.0",
-  "description": "ssloth desktop wrapper — runs the portal as a local app",
+  "description": "ssloth desktop wrapper \u2014 runs the portal as a local app",
   "author": "Xodo Technology, LLC.",
   "homepage": "https://github.com/XodoTechnology/ssloth",
   "main": "main.js",
@@ -51,7 +51,8 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     },
     "linux": {
       "target": [

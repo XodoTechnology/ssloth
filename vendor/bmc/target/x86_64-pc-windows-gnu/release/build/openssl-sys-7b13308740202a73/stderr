@@ -1,0 +1,110 @@
+DEBUG: all keys: APPLINKDIR, BINDIR, CMAKECONFIGDIR, COMMENT, ENGINESDIR, INCLUDEDIR, LDLIBS, LIBDIR, MODULESDIR, PKGCONFIGDIR, PREFIX, VERSION, libdir
+Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 55.
+DEBUG: LIBDIR = , libdir =  => Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 57.
+LIBDIR = 
+No value given for CMAKECONFIGDIR
+No value given for PKGCONFIGDIR
+No value given for libdir
+DEBUG: PREFIX = . => PREFIX = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src
+Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 72.
+DEBUG: libdir =  => Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 75.
+libdir = 
+DEBUG: BINDIR = apps => BINDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/apps, BINDIR_REL_PREFIX = apps
+DEBUG: LIBDIR = Use of uninitialized value in print at util/mkinstallvars.pl line 91.
+ => Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 108.
+LIBDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src, LIBDIR_REL_PREFIX = 
+DEBUG: INCLUDEDIR = [ include, ./include ] => INCLUDEDIR = [ /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/include, /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/include ], INCLUDEDIR_REL_PREFIX = [ include, ./include ]
+DEBUG: APPLINKDIR = ms => APPLINKDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/ms, APPLINKDIR_REL_PREFIX = ms
+DEBUG: ENGINESDIR = engines => ENGINESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/engines, ENGINESDIR_REL_LIBDIR = engines
+DEBUG: MODULESDIR = providers => MODULESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src/providers, MODULESDIR_REL_LIBDIR = providers
+DEBUG: PKGCONFIGDIR = . => PKGCONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src, PKGCONFIGDIR_REL_LIBDIR = .
+DEBUG: CMAKECONFIGDIR = . => CMAKECONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/build/src, CMAKECONFIGDIR_REL_LIBDIR = .
+Use of uninitialized value in join or string at util/mkinstallvars.pl line 157.
+DEBUG: all keys: APPLINKDIR, BINDIR, CMAKECONFIGDIR, COMMENT, ENGINESDIR, INCLUDEDIR, LDLIBS, LIBDIR, MODULESDIR, PKGCONFIGDIR, PREFIX, VERSION, libdir
+DEBUG: LIBDIR = lib, libdir = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib => LIBDIR = lib
+No value given for COMMENT
+DEBUG: PREFIX = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install => PREFIX = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install
+DEBUG: libdir = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib => libdir = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib
+DEBUG: BINDIR = bin => BINDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/bin, BINDIR_REL_PREFIX = bin
+DEBUG: LIBDIR = lib => LIBDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib, LIBDIR_REL_PREFIX = lib
+DEBUG: INCLUDEDIR = include => INCLUDEDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/include, INCLUDEDIR_REL_PREFIX = include
+DEBUG: APPLINKDIR = include/openssl => APPLINKDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/include/openssl, APPLINKDIR_REL_PREFIX = include/openssl
+DEBUG: ENGINESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/engines-3 => ENGINESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/engines-3, ENGINESDIR_REL_LIBDIR = engines-3
+DEBUG: MODULESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/ossl-modules => MODULESDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/ossl-modules, MODULESDIR_REL_LIBDIR = ossl-modules
+DEBUG: PKGCONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/pkgconfig => PKGCONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/pkgconfig, PKGCONFIGDIR_REL_LIBDIR = pkgconfig
+DEBUG: CMAKECONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/cmake/OpenSSL => CMAKECONFIGDIR = /root/vscode/ssloth/vendor/bmc/target/x86_64-pc-windows-gnu/release/build/openssl-sys-7b13308740202a73/out/openssl-build/install/lib/cmake/OpenSSL, CMAKECONFIGDIR_REL_LIBDIR = cmake/OpenSSL
+Use of uninitialized value in concatenation (.) or string at util/mkinstallvars.pl line 137.
+apps/lib/s_socket.c: In function 'init_client':
+apps/lib/s_socket.c:141:25: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  141 |                 *sock = INVALID_SOCKET;
+      |                         ^~~~~~~~~~~~~~
+apps/lib/s_socket.c:172:21: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  172 |             *sock = INVALID_SOCKET;
+      |                     ^~~~~~~~~~~~~~
+apps/lib/s_socket.c:181:25: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  181 |                 *sock = INVALID_SOCKET;
+      |                         ^~~~~~~~~~~~~~
+apps/lib/s_socket.c: In function 'do_server':
+apps/lib/s_socket.c:468:21: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  468 |             asock = INVALID_SOCKET;
+      |                     ^~~~~~~~~~~~~~
+In file included from /usr/share/mingw-w64/include/winnt.h:27,
+                 from /usr/share/mingw-w64/include/minwindef.h:163,
+                 from /usr/share/mingw-w64/include/windef.h:9,
+                 from /usr/share/mingw-w64/include/windows.h:69,
+                 from crypto/async/arch/../async_local.h:20,
+                 from crypto/async/arch/async_win.c:11:
+In function '__readgsqword',
+    inlined from 'GetCurrentFiber' at /usr/share/mingw-w64/include/winnt.h:10021:60,
+    inlined from 'async_fibre_init_dispatcher' at crypto/async/arch/async_win.c:59:24:
+/usr/share/mingw-w64/include/psdk_inc/intrin-impl.h:838:1: warning: array subscript 0 is outside array bounds of 'long long unsigned int[0]' [-Warray-bounds=]
+  838 | __buildreadseg(__readgsqword, unsigned __int64, "gs", "q")
+      | ^~~~~~~~~~~~~~
+In function 'async_fibre_init_dispatcher':
+cc1: note: source object is likely at address zero
+crypto/bio/bio_sock.c: In function 'BIO_get_accept_socket':
+crypto/bio/bio_sock.c:256:13: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  256 |     int s = INVALID_SOCKET;
+      |             ^~~~~~~~~~~~~~
+crypto/bio/bio_sock.c:261:16: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  261 |         return INVALID_SOCKET;
+      |                ^~~~~~~~~~~~~~
+crypto/bio/bio_sock.c:272:13: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  272 |         s = INVALID_SOCKET;
+      |             ^~~~~~~~~~~~~~
+crypto/bio/bio_sock.c:279:13: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  279 |         s = INVALID_SOCKET;
+      |             ^~~~~~~~~~~~~~
+crypto/bio/bio_sock2.c: In function 'BIO_socket':
+crypto/bio/bio_sock2.c:47:16: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+   47 |         return INVALID_SOCKET;
+      |                ^~~~~~~~~~~~~~
+crypto/bio/bio_sock2.c:54:16: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+   54 |         return INVALID_SOCKET;
+      |                ^~~~~~~~~~~~~~
+crypto/bio/bio_sock2.c: In function 'BIO_accept_ex':
+crypto/bio/bio_sock2.c:434:16: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  434 |         return INVALID_SOCKET;
+      |                ^~~~~~~~~~~~~~
+crypto/bio/bio_sock2.c:439:16: warning: overflow in conversion from 'long long unsigned int' to 'int' changes value from '18446744073709551615' to '-1' [-Woverflow]
+  439 |         return INVALID_SOCKET;
+      |                ^~~~~~~~~~~~~~
+crypto/threads_win.c: In function 'CRYPTO_atomic_store':
+crypto/threads_win.c:717:27: warning: pointer targets in passing argument 1 of '_InterlockedExchange64' differ in signedness [-Wpointer-sign]
+  717 |     InterlockedExchange64(dst, val);
+      |                           ^~~
+      |                           |
+      |                           uint64_t * {aka long long unsigned int *}
+In file included from /usr/share/mingw-w64/include/winnt.h:27,
+                 from /usr/share/mingw-w64/include/minwindef.h:163,
+                 from /usr/share/mingw-w64/include/windef.h:9,
+                 from /usr/share/mingw-w64/include/windows.h:69,
+                 from crypto/threads_win.c:11:
+/usr/share/mingw-w64/include/psdk_inc/intrin-impl.h:789:50: note: expected 'volatile long long int *' but argument is of type 'uint64_t *' {aka 'long long unsigned int *'}
+  789 | __int64 _InterlockedExchange64(__int64 volatile *Target, __int64 Value) {
+      |                                                  ^
+Number found where operator expected (Missing operator before "144"?) at (eval 5321) line 1, near "$-144"
+crypto/x509/x509_def.c: In function 'get_windows_default_path':
+crypto/x509/x509_def.c:35:13: warning: assignment discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   35 |     ossldir = ossl_get_openssldir();
+      |             ^

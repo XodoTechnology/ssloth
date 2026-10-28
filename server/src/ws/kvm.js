@@ -21,7 +21,17 @@ const path = require('path');
 const { audit } = require('../db');
 const { resolveConnectSpec } = require('../ssh/manager');
 
-const bmc = require(path.join(__dirname, '..', '..', 'native', 'bmc.node'));
+// The vendored bmc-core napi addon. Built per-platform by the Rust build
+// (vendor/bmc); a missing or wrong-arch binary degrades this endpoint to a
+// clear error instead of taking the whole server down at require time.
+let bmc = null;
+let bmcError = null;
+try {
+  bmc = require(path.join(__dirname, '..', '..', 'native', 'bmc.node'));
+} catch (e) {
+  bmcError = e.message;
+  console.warn('[ssloth] bmc addon unavailable:', e.message);
+}
 
 // Persistent sessions, same model as ssh: detach keeps the console alive.
 const sessions = new Map(); // id -> {id, bmc, ws, label, createdAt}
@@ -49,6 +59,11 @@ function chainToRoutes(hops) {
 }
 
 function handleKvmWs(ws, req, user) {
+  if (!bmc) {
+    send(ws, { type: 'status', state: 'error', message: `KVM backend unavailable on this install (${bmcError})` });
+    ws.close();
+    return;
+  }
   let session = null;
 
   ws.on('message', (data, isBinary) => {
