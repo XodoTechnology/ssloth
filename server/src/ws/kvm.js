@@ -77,6 +77,21 @@ function handleKvmWs(ws, req, user) {
         case 'cad':
           sendInput(() => session.bmc.sendCad());
           break;
+        case 'mount': {
+          // spec: server-side path or http(s) URL — async; outcome lands as a
+          // notice (mounted (fetched by the BMC) / proxied / error)
+          const spec = String(msg.spec || '');
+          if (session && spec) {
+            session.bmc
+              .mountMedia(spec)
+              .then((m) => send(ws, { type: 'status', state: 'notice', message: String(m) }))
+              .catch((e) => send(ws, { type: 'status', state: 'notice', message: `mount failed: ${e.message}` }));
+          }
+          break;
+        }
+        case 'unmount':
+          sendInput(() => session.bmc.unmountMedia());
+          break;
         case 'close': {
           const s = session;
           session = null;

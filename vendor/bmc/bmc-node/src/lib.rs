@@ -8,13 +8,13 @@
 //! `net`'s global table as a `Vec<Route>` chain dialled outermost-first.
 
 use bmc_core::console::{self, Attempt};
-use bmc_core::events::{Event, EventSink};
+use bmc_core::events::{Event, EventSink, Sink};
 use bmc_core::frame_pump::{Format, FramePump};
 use bmc_core::input::encoder::{Encode, FamilyEncoder};
 use bmc_core::input::Event as InputEvent;
 use bmc_core::jobs::Jobs;
 use bmc_core::routes::{Auth, Kind, Route};
-use bmc_core::{event_log, families, ipmi, net, power};
+use bmc_core::{event_log, families, ipmi, media, net, power, vmedia};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
@@ -100,12 +100,16 @@ impl EventSink for JsSink {
     }
 }
 
-/// Everything the connected console owns: its input channel with the family's
-/// encoder, and the teardown a close must run.
+/// Everything the connected console owns: the console itself (media mounts
+/// borrow its session/token pieces), its family's input encoder, the teardown
+/// a close must run, and live media mounts to detach on close.
 struct ConsoleHandle {
-    tx: Sender<Vec<u8>>,
+    console: console::Console,
     enc: FamilyEncoder,
     closing: Option<console::Closing>,
+    jobs: Jobs,
+    sink: Sink,
+    mounts: Vec<vmedia::Mount>,
 }
 
 #[napi]
@@ -169,11 +173,19 @@ impl BmcSession {
                 Ok(Ok(Ok(ok))) => {
                     let title = ok.title.clone();
                     let (c, closing) = console::adopt(ok, &spec.host, spec.user, spec.pass);
-                    let enc = FamilyEncoder::new(c.family);
+                    let family = c.family;
+                    let enc = FamilyEncoder::new(family);
                     let alive = c.alive.clone();
                     let decoder = c.decoder.clone();
-                    *handle.lock().unwrap() = Some(ConsoleHandle { tx: c.tx.clone(), enc, closing: Some(closing) });
-                    on_event.call(Ok(format!("ready:{title}:{:?}", c.family)), ThreadsafeFunctionCallMode::NonBlocking);
+                    *handle.lock().unwrap() = Some(ConsoleHandle {
+                        console: c,
+                        enc,
+                        closing: Some(closing),
+                        jobs: Jobs::default(),
+                        sink: Arc::new(JsSink { tsfn: on_event.clone() }) as Sink,
+                        mounts: Vec::new(),
+                    });
+                    on_event.call(Ok(format!("ready:{title}:{family:?}")), ThreadsafeFunctionCallMode::NonBlocking);
                     let ev = on_event.clone();
                     std::thread::spawn(move || {
                         let mut pump = FramePump::new(decoder);
@@ -204,7 +216,32 @@ impl BmcSession {
         let mut out = Vec::new();
         h.enc.encode(&ev, &mut out);
         for pkt in out {
-            let _ = h.tx.send(pkt);
+            let _ = h.console.tx.send(pkt);
+        }
+        Ok(())
+    }
+
+    /// Mount an ISO — a local path on the server, or an http(s) URL the BMC
+    /// fetches where it can (iLO/iDRAC) and is proxied elsewhere. Resolves via
+    /// media::attach per family; result string says how the image is served.
+    #[napi]
+    pub fn mount_media(&self, spec: String) -> AsyncTask<MountTask> {
+        let rx = self
+            .handle
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|h| media::attach(&h.console, spec, &h.jobs, h.sink.clone()));
+        AsyncTask::new(MountTask { rx, handle: self.handle.clone() })
+    }
+
+    /// Detach every mount this session holds.
+    #[napi]
+    pub fn unmount_media(&self) -> Result<()> {
+        let mut h = self.handle.lock().unwrap();
+        let h = h.as_mut().ok_or_else(|| Error::from_reason("console not ready"))?;
+        for m in h.mounts.drain(..) {
+            let _ = m.unmount();
         }
         Ok(())
     }
@@ -251,9 +288,14 @@ impl BmcSession {
     #[napi]
     pub fn close(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        let closing = self.handle.lock().unwrap().as_mut().and_then(|h| h.closing.take());
-        if let Some(closing) = closing {
-            let _ = catch_unwind(AssertUnwindSafe(|| console::close(closing)));
+        let mut guard = self.handle.lock().unwrap();
+        if let Some(h) = guard.as_mut() {
+            for m in h.mounts.drain(..) {
+                let _ = m.unmount();
+            }
+            if let Some(closing) = h.closing.take() {
+                let _ = catch_unwind(AssertUnwindSafe(|| console::close(closing)));
+            }
         }
     }
 }
@@ -483,4 +525,35 @@ impl Task for DetectTask {
 #[napi]
 pub fn detect_family(host: String) -> AsyncTask<DetectTask> {
     AsyncTask::new(DetectTask { host })
+}
+
+/// Waits on media::attach's result and retains the Mount on success.
+pub struct MountTask {
+    rx: Option<std::sync::mpsc::Receiver<media::Attached>>,
+    handle: Arc<Mutex<Option<ConsoleHandle>>>,
+}
+
+#[napi]
+impl Task for MountTask {
+    type Output = String;
+    type JsValue = String;
+    fn compute(&mut self) -> Result<Self::Output> {
+        let rx = self
+            .rx
+            .take()
+            .ok_or_else(|| Error::from_reason("a mount is already running (or console not ready)"))?;
+        match rx.recv() {
+            Ok(Ok((mount, note))) => {
+                if let Some(h) = self.handle.lock().unwrap().as_mut() {
+                    h.mounts.push(mount);
+                }
+                Ok(format!("mounted{note}"))
+            }
+            Ok(Err(e)) => Err(Error::from_reason(e.to_string())),
+            Err(_) => Err(Error::from_reason("mount thread ended")),
+        }
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
 }

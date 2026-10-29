@@ -1,6 +1,8 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
 const dgram = require('dgram');
 const { db } = require('../db');
@@ -434,6 +436,20 @@ router.get('/:id/bmc-detect', async (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// ISO upload for virtual media: raw body to data/media/, then mounted via
+// the console's mount call with the returned server-side path.
+router.put('/:id/media-upload', express.raw({ type: () => true, limit: '8gb' }), (req, res) => {
+  const own = db.prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(req.params.id, req.user.id);
+  if (!own) return res.status(404).json({ error: 'not found' });
+  const name = path.basename(String(req.query.name || 'image.iso')).replace(/[^\w.\- ]/g, '_');
+  const dir = path.join(__dirname, '..', '..', 'data', 'media');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${own.id}-${Date.now()}-${name}`);
+  fs.writeFileSync(file, req.body || Buffer.alloc(0));
+  auditReq(req, 'bmc.media_upload', name);
+  res.json({ path: file });
 });
 
 module.exports = router;

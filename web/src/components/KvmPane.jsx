@@ -18,6 +18,9 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   const stateRef = useRef({ status: 'idle' });
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  const [mountOpen, setMountOpen] = useState(false);
+  const [mountUrl, setMountUrl] = useState('');
+  const fileRef = useRef(null);
   const toast = useStore((s) => s.toast);
   const setPaneStateRef = useRef(setPaneState);
   setPaneStateRef.current = setPaneState;
@@ -178,9 +181,47 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
       {focused && st.status === 'ready' && (
         <div className="absolute top-2 right-2 flex gap-1 opacity-70 hover:opacity-100">
           <button className="btn-ghost text-xs px-2 py-1" onClick={() => setPasteOpen(true)}>Paste</button>
+          <button className="btn-ghost text-xs px-2 py-1" onClick={() => setMountOpen(true)}>Mount ISO</button>
           <button className="btn-ghost text-xs px-2 py-1" onClick={() => sendJson({ type: 'cad' })}>Ctrl+Alt+Del</button>
         </div>
       )}
+      {mountOpen && (
+        <Modal title="Mount virtual media" onClose={() => setMountOpen(false)}>
+          <div className="space-y-3">
+            <div>
+              <label className="label">Image URL (http/https)</label>
+              <input className="input w-full font-mono text-xs" value={mountUrl} onChange={(e) => setMountUrl(e.target.value)} placeholder="http://host/win11.iso — the BMC fetches it where it can" />
+            </div>
+            <div className="flex items-center gap-2">
+              <input ref={fileRef} type="file" accept=".iso,.img" className="text-xs text-zinc-400" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => { sendJson({ type: 'unmount' }); setMountOpen(false); }}>Unmount</button>
+              <button
+                className="btn-ghost"
+                disabled={!fileRef.current?.files?.[0]}
+                onClick={async () => {
+                  const f = fileRef.current.files[0];
+                  const hostId = pane.target?.hostId;
+                  const r = await fetch(`/api/hosts/${hostId}/media-upload?name=${encodeURIComponent(f.name)}`, { method: 'PUT', body: f, credentials: 'same-origin' });
+                  const j = await r.json();
+                  if (j.path) { sendJson({ type: 'mount', spec: j.path }); setMountOpen(false); }
+                }}
+              >
+                Upload + mount
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!mountUrl}
+                onClick={() => { sendJson({ type: 'mount', spec: mountUrl }); setMountOpen(false); }}
+              >
+                Mount URL
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {pasteOpen && (
         <Modal title="Paste as keystrokes" onClose={() => setPasteOpen(false)}>
           <div className="space-y-3">
