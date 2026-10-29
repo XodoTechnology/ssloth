@@ -119,12 +119,14 @@ function handleKvmWs(ws, req, user) {
     }
 
     const id = `kvm${++seq}-${Date.now().toString(36)}`;
+    // napi ThreadsafeFunction callbacks fire as (err, value) — the payload
+    // is the second arg, not the first.
     const b = new bmc.BmcSession(
       { host: spec.hostname, user: spec.username || '', pass, seize: !!msg.seize },
-      (e) => onEvent(String(e)),
-      (frame) => {
+      (_err, line) => onEvent(String(line ?? '')),
+      (_err, frame) => {
         const s = sessions.get(id);
-        if (s?.ws && s.ws.readyState === 1) s.ws.send(Buffer.from(frame));
+        if (frame && s?.ws && s.ws.readyState === 1) s.ws.send(Buffer.from(frame));
       }
     );
 
