@@ -63,19 +63,19 @@ function handleKvmWs(ws, req, user) {
           break;
         }
         case 'key':
-          session?.bmc.sendKey(msg.usage | 0, !!msg.down, !!msg.repeat);
+          sendInput(() => session.bmc.sendKey(msg.usage | 0, !!msg.down, !!msg.repeat));
           break;
         case 'pointer':
-          session?.bmc.sendPointer(+msg.x, +msg.y, msg.fw | 0, msg.fh | 0, msg.buttons | 0, msg.wheel | 0);
+          sendInput(() => session.bmc.sendPointer(+msg.x, +msg.y, msg.fw | 0, msg.fh | 0, msg.buttons | 0, msg.wheel | 0));
           break;
         case 'char':
-          session?.bmc.sendChar(String(msg.c || '').slice(0, 1));
+          sendInput(() => session.bmc.sendChar(String(msg.c || '').slice(0, 1)));
           break;
         case 'releaseAll':
-          session?.bmc.releaseAll();
+          sendInput(() => session.bmc.releaseAll());
           break;
         case 'cad':
-          session?.bmc.sendCad();
+          sendInput(() => session.bmc.sendCad());
           break;
         case 'close': {
           const s = session;
@@ -94,6 +94,16 @@ function handleKvmWs(ws, req, user) {
     if (session && session.ws === ws) session.ws = null;
     session = null;
   });
+
+  // Input is best-effort: a pre-ready key or a dead channel is a notice,
+  // never the fatal 'error' status that ends the session client-side.
+  function sendInput(fn) {
+    try {
+      if (session) fn();
+    } catch (e) {
+      send(ws, { type: 'status', state: 'notice', message: e.message });
+    }
+  }
 
   function connect(msg) {
     let spec;

@@ -111,6 +111,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   const sendJson = (o) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(o));
 
   const onKey = (e, down) => {
+    if (stateRef.current.status !== 'ready') return;
     const u = hidFor(e.code);
     if (u === null) return;
     if (down && e.repeat && heldRef.current.has(u)) { sendJson({ type: 'key', usage: u, down: true, repeat: true }); e.preventDefault(); return; }
@@ -121,6 +122,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   };
 
   const pointer = (e, buttons, wheel = 0) => {
+    if (stateRef.current.status !== 'ready') return;
     const c = canvasRef.current;
     if (!c || !c.width) return;
     const r = c.getBoundingClientRect();
