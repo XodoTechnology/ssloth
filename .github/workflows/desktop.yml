@@ -36,12 +36,20 @@ jobs:
       - name: mingw target
         if: matrix.script == 'win32'
         run: rustup target add x86_64-pc-windows-gnu
+      # openssl vendored build needs a complete perl — Git Bash's MSYS2 perl
+      # lacks Locale::Maketext::Simple; Strawberry (preinstalled/choco) has it.
+      - name: strawberry perl + make
+        if: matrix.script == 'win32'
+        run: choco install strawberryperl make -y --no-progress
+        shell: pwsh
       - name: darwin targets
         if: matrix.script == 'darwin'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: build addon
         shell: bash
-        run: ./scripts/build-bmc-node.sh ${{ matrix.script }}
+        run: |
+          [ "${{ matrix.script }}" = win32 ] && export PATH="/c/Strawberry/perl/bin:/c/ProgramData/chocolatey/bin:$PATH"
+          ./scripts/build-bmc-node.sh ${{ matrix.script }}
         env:
           LIBNODE_PATH: ${{ github.workspace }}/vendor/bmc/libnode-win
       - uses: actions/upload-artifact@v4
