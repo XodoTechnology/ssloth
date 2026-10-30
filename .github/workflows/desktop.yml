@@ -3,6 +3,7 @@ name: desktop
 on:
   push:
     branches: [main, dev]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
@@ -108,3 +109,21 @@ jobs:
             desktop/release/*.AppImage
             desktop/release/*.deb
           if-no-files-found: error
+
+  release:
+    name: github release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: arts
+      - name: create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" arts/ssloth-*/*             --title "$GITHUB_REF_NAME" --generate-notes ||           gh release upload "$GITHUB_REF_NAME" arts/ssloth-*/* --clobber
