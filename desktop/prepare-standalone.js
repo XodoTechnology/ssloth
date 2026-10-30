@@ -82,7 +82,26 @@ async function main() {
     fs.rmSync(path.join(bsDir, 'build'), { recursive: true, force: true });
     // Relative paths + cwd: on Windows an absolute D:\... reads as tar's
     // remote-host syntax ("Cannot connect to D:").
-    ok = run('tar', ['-xzf', path.basename(tgz), '-C', path.relative(STAGE, bsDir)], { cwd: STAGE }).status === 0;
+    // Pure-Node untar — avoids platform tar quirks (GNU tar read D:\... as
+    // remote-host syntax on Windows; bsdtar flag differences elsewhere).
+    const buf = require('zlib').gunzipSync(fs.readFileSync(tgz));
+    let off = 0, wrote = 0;
+    while (off + 512 <= buf.length) {
+      const hdr = buf.slice(off, off + 512);
+      if (!hdr[0]) break;
+      const name = hdr.slice(0, 100).toString().replace(/\0.*$/, '');
+      const size = parseInt(hdr.slice(124, 136).toString().replace(/\0.*$/, ''), 8) || 0;
+      const type = String.fromCharCode(hdr[156]);
+      const dest = path.join(bsDir, name);
+      if (type === '5') fs.mkdirSync(dest, { recursive: true });
+      else if (type === '0' || type === '\0') {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, buf.slice(off + 512, off + 512 + size));
+        wrote++;
+      }
+      off += 512 + Math.ceil(size / 512) * 512;
+    }
+    ok = wrote > 0;
     fs.rmSync(tgz, { force: true });
   } catch {}
   if (!ok) {
