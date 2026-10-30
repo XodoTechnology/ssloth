@@ -22,6 +22,7 @@ import {
 import { api } from '../api';
 import { useStore } from '../store';
 import HostForm from '../components/HostForm';
+import Modal from '../components/Modal';
 import TerminalView from '../components/TerminalView';
 import SshConfigImport from '../components/SshConfigImport';
 
@@ -48,6 +49,7 @@ export default function Sessions() {
   const [healthData, setHealthData] = useState({});
   const [tabMenu, setTabMenu] = useState(null); // {x, y, tab} right-click menu
   const [powerMenu, setPowerMenu] = useState(null); // {x, y, host} bmc power menu
+  const [bmcView, setBmcView] = useState(null); // {host, kind: 'sel'|'sensors'|'detect', data, loading, error}
   const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
   const [workspaces, setWorkspaces] = useState(null);
 
@@ -851,8 +853,72 @@ export default function Sessions() {
             >
               Reset BMC
             </button>
+            <div className="my-1 border-t border-ink-800" />
+            {[
+              ['detect', 'Detect family'],
+              ['sensors', 'Sensors'],
+              ['sel', 'Event log (SEL)'],
+            ].map(([kind, label]) => (
+              <button
+                key={kind}
+                className="w-full px-3 py-1.5 text-left hover:bg-ink-800"
+                onClick={async () => {
+                  const h = powerMenu.host;
+                  setPowerMenu(null);
+                  setBmcView({ host: h, kind, loading: true });
+                  try {
+                    const path = kind === 'detect' ? 'bmc-detect' : kind;
+                    setBmcView({ host: h, kind, data: await api(`/api/hosts/${h.id}/${path}`) });
+                  } catch (e) {
+                    setBmcView({ host: h, kind, error: e.message });
+                  }
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
+      )}
+
+      {bmcView && (
+        <Modal
+          title={`${bmcView.kind === 'sel' ? 'System Event Log' : bmcView.kind === 'sensors' ? 'Sensors' : 'BMC detect'} — ${bmcView.host.name}`}
+          onClose={() => setBmcView(null)}
+        >
+          {bmcView.loading && <p className="text-sm text-zinc-500">querying {bmcView.host.hostname}…</p>}
+          {bmcView.error && <p className="text-sm text-rose-400">{bmcView.error}</p>}
+          {bmcView.data?.family && (
+            <p className="text-sm text-zinc-300">
+              family <span className="font-mono text-emerald-400">{bmcView.data.family}</span> · vendor{' '}
+              <span className="font-mono text-emerald-400">{bmcView.data.vendor}</span>
+            </p>
+          )}
+          {bmcView.data?.entries && (
+            <div className="max-h-80 overflow-auto rounded border border-ink-800">
+              <table className="w-full text-[11px] font-mono">
+                <tbody>
+                  {bmcView.data.entries.map((e, i) => (
+                    <tr key={i} className="border-b border-ink-800/60">
+                      {(bmcView.kind === 'sel'
+                        ? [e.id, e.created, e.severity, e.message]
+                        : [e.name, e.reading, e.units, e.status, e.thresholds]
+                      ).map((c, j) => (
+                        <td key={j} className={`px-2 py-1 ${/crit|fatal|non.?recoverable/i.test(c || '') ? 'text-rose-400' : /warn/i.test(c || '') ? 'text-amber-300' : 'text-zinc-300'}`}>
+                          {c}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {bmcView.data.entries.length === 0 && <p className="p-3 text-xs text-zinc-600">empty</p>}
+            </div>
+          )}
+          {bmcView.data?.warnings?.length > 0 && (
+            <p className="text-[11px] text-amber-400">{bmcView.data.warnings.join('; ')}</p>
+          )}
+        </Modal>
       )}
 
       {editing && (
