@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-22.04, name: linux-x64, script: linux }
-          - { os: windows-2025, name: win32-x64, script: win32 }
+          - { os: ubuntu-22.04, name: win32-x64, script: win32 }
           - { os: macos-15, name: darwin-universal, script: darwin }
     steps:
       - uses: actions/checkout@v4
@@ -33,19 +33,21 @@ jobs:
           key: ${{ matrix.name }}
       # windows-gnu needs mingw (installed image has gcc); the libnode.dll
       # stub is committed at vendor/bmc/libnode-win.
-      - name: mingw target
+      # win32 .node cross-builds on ubuntu (mingw-gnu + committed libnode
+      # stub) — openssl-src+mingw on the windows image needs a full unix perl
+      # and keeps breaking across image revisions.
+      - name: mingw toolchain
         if: matrix.script == 'win32'
-        run: rustup target add x86_64-pc-windows-gnu
-      # openssl vendored needs a unix-path perl with full core modules —
-      # the image's MSYS2 (C:\msys64, off PATH) has it, plus mingw gcc/make.
-      # Strawberry's MSWin32 perl is rejected by openssl Configure.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
       - name: darwin targets
         if: matrix.script == 'darwin'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: build addon
         shell: bash
         run: |
-          [ "${{ matrix.script }}" = win32 ] && export PATH="/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
           ./scripts/build-bmc-node.sh ${{ matrix.script }}
         env:
           LIBNODE_PATH: ${{ github.workspace }}/vendor/bmc/libnode-win
