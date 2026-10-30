@@ -81,9 +81,20 @@ jobs:
         run: |
           mkdir -p server/native
           cp arts/bmc-node-*/*.node server/native/ || true
+      - name: build web bundle
+        working-directory: web
+        shell: bash
+        run: |
+          npm ci
+          npm run build
       - name: package
         working-directory: desktop
         shell: bash
+        env:
+          # prebuild-install hits the GitHub API — unauthenticated it rate-
+          # limits on shared runner IPs and falls back to node-gyp (which
+          # then fails for lack of a usable VS toolchain in its env)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm ci
           npm run ${{ matrix.dist }}
