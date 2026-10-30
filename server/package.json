@@ -9,7 +9,7 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "compression": "^1.8.2",
     "cookie": "^0.7.2",
     "cookie-parser": "^1.4.7",
