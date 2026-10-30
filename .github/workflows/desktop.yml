@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: ./scripts/build-bmc-node.sh ${{ matrix.script }}
         env:
-          LIBNODE_PATH: vendor/bmc/libnode-win
+          LIBNODE_PATH: ${{ github.workspace }}/vendor/bmc/libnode-win
       - uses: actions/upload-artifact@v4
         with:
           name: bmc-node-${{ matrix.name }}
