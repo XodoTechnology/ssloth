@@ -9,12 +9,23 @@ const path = require('path');
 
 let bmc = null;
 let bmcError = null;
-try {
-  bmc = require(path.join(__dirname, '..', 'native', 'bmc.node'));
-} catch (e) {
-  bmcError = e.message;
-  console.warn('[ssloth] bmc addon unavailable:', e.message);
+// Per-platform addon first (bmc.linux-x64.node, bmc.win32-x64.node,
+// bmc.darwin-arm64.node…), then the generic bmc.node — so one package can
+// ship every prebuilt variant and pick at runtime.
+const nativeDir = path.join(__dirname, '..', 'native');
+const candidates = [`bmc.${process.platform}-${process.arch}.node`, 'bmc.node'];
+for (const name of candidates) {
+  const p = path.join(nativeDir, name);
+  if (!require('fs').existsSync(p)) continue;
+  try {
+    bmc = require(p);
+    break;
+  } catch (e) {
+    bmcError = `${name}: ${e.message}`;
+    console.warn('[ssloth] bmc addon failed:', bmcError);
+  }
 }
+if (!bmc) console.warn('[ssloth] bmc addon unavailable:', bmcError || 'no binary for this platform');
 
 // Map a resolved ssloth bastion chain onto bmc RouteSpec hops (dial order:
 // outermost first).
