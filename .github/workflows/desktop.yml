@@ -97,7 +97,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm ci
-          npm run ${{ matrix.dist }}
+          npm run ${{ matrix.dist }} -- --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: ssloth-${{ matrix.name }}

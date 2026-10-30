@@ -80,7 +80,9 @@ async function main() {
   try {
     await dl(url, tgz);
     fs.rmSync(path.join(bsDir, 'build'), { recursive: true, force: true });
-    ok = run('tar', ['-xzf', tgz, '-C', bsDir]).status === 0;
+    // Relative paths + cwd: on Windows an absolute D:\... reads as tar's
+    // remote-host syntax ("Cannot connect to D:").
+    ok = run('tar', ['-xzf', path.basename(tgz), '-C', path.relative(STAGE, bsDir)], { cwd: STAGE }).status === 0;
     fs.rmSync(tgz, { force: true });
   } catch {}
   if (!ok) {

@@ -3,7 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "description": "ssloth desktop wrapper \u2014 runs the portal as a local app",
-  "author": "Xodo Technology, LLC.",
+  "author": {
+    "name": "Xodo Technology",
+    "email": "accounts@xodo.net"
+  },
   "homepage": "https://github.com/XodoTechnology/ssloth",
   "main": "main.js",
   "scripts": {
