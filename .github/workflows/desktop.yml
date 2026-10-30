@@ -1,0 +1,92 @@
+name: desktop
+
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "release tag (optional)"
+        required: false
+
+# Builds the bmc-node addon natively per platform, then electron-builder
+# packages on the matching runner — no wine/mingw hacks: windows-2025 does
+# the NSIS installer, macos-15 does the dmg (arm64 machine, lipo universal).
+
+jobs:
+  native:
+    name: "bmc.node ${{ matrix.name }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux-x64, script: linux }
+          - { os: windows-2025, name: win32-x64, script: win32 }
+          - { os: macos-15, name: darwin-universal, script: darwin }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/bmc
+          key: ${{ matrix.name }}
+      # windows-gnu needs mingw (installed image has gcc); the libnode.dll
+      # stub is committed at vendor/bmc/libnode-win.
+      - name: mingw target
+        if: matrix.script == 'win32'
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: darwin targets
+        if: matrix.script == 'darwin'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: build addon
+        shell: bash
+        run: ./scripts/build-bmc-node.sh ${{ matrix.script }}
+        env:
+          LIBNODE_PATH: vendor/bmc/libnode-win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bmc-node-${{ matrix.name }}
+          path: server/native/bmc.*.node
+          if-no-files-found: error
+
+  package:
+    name: "package ${{ matrix.name }}"
+    needs: native
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux, dist: dist:linux }
+          - { os: windows-2025, name: win, dist: dist }
+          - { os: macos-15, name: mac, dist: dist:mac }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          path: arts
+      - name: place addons
+        shell: bash
+        run: |
+          mkdir -p server/native
+          cp arts/bmc-node-*/*.node server/native/ || true
+      - name: package
+        working-directory: desktop
+        shell: bash
+        run: |
+          npm ci
+          npm run ${{ matrix.dist }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssloth-${{ matrix.name }}
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+          if-no-files-found: error
