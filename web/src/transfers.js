@@ -58,6 +58,37 @@ export function startUpload(sessionId, dir, file, label) {
   return id;
 }
 
-export function uploadToSession(sessionId, dir, files, label) {
-  for (const f of files) startUpload(sessionId, dir, f, label);
+async function mkdirp(sessionId, dir) {
+  // best-effort mkdir of each segment; failures (exists) are ignored
+  let cur = '';
+  for (const seg of dir.split('/').filter(Boolean)) {
+    cur += '/' + seg;
+    try {
+      await fetch(`/api/sftp/${sessionId}/mkdir`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ path: cur }),
+      });
+    } catch {}
+  }
+}
+
+// items: File[] or {file, rel}[] — rel is a dir path under `dir`
+// (e.g. 'myfolder/sub'), so dropped folders keep their structure.
+export function uploadToSession(sessionId, dir, items, label) {
+  const ensured = new Set();
+  for (const it of items) {
+    const file = it instanceof File ? it : it.file;
+    const rel =
+      it instanceof File
+        ? (it.webkitRelativePath || '').replace(/\/[^/]*$/, '').replace(/^\/+/, '')
+        : (it.rel || '').replace(/^\/+|\/+$/g, '');
+    const target = rel ? `${dir}/${rel}` : dir;
+    if (rel && !ensured.has(target)) {
+      ensured.add(target);
+      mkdirp(sessionId, target);
+    }
+    startUpload(sessionId, target, file, label);
+  }
 }

@@ -83,10 +83,40 @@ export default function SftpPanel({ sessionId, label }) {
     setTimeout(() => load(dir), 1500);
   };
 
-  const onDrop = (e) => {
+  const onDrop = async (e) => {
     e.preventDefault();
     setDragOver(false);
-    if (e.dataTransfer?.files?.length) doUpload([...e.dataTransfer.files]);
+    // Folders only expose their contents via webkitGetAsEntry() — walk the
+    // tree and keep each file's relative dir so structure is preserved.
+    const items = [...(e.dataTransfer?.items || [])];
+    const entries = items.map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+    if (!entries.length) {
+      if (e.dataTransfer?.files?.length) doUpload([...e.dataTransfer.files]);
+      return;
+    }
+    const out = [];
+    const walk = (ent, rel) =>
+      new Promise((res) => {
+        if (ent.isFile) ent.file((f) => { out.push({ file: f, rel }); res(); }, res);
+        else if (ent.isDirectory) {
+          const rd = ent.createReader();
+          const sub = rel ? `${rel}/${ent.name}` : ent.name;
+          const pending = [];
+          const drain = () =>
+            rd.readEntries(async (ents) => {
+              if (!ents.length) {
+                for (const s of pending) await walk(s, sub);
+                res();
+              } else {
+                pending.push(...ents);
+                drain();
+              }
+            }, res);
+          drain();
+        } else res();
+      });
+    for (const ent of entries) await walk(ent, '');
+    if (out.length) doUpload(out);
   };
 
   const download = (name) => {
