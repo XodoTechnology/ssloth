@@ -344,6 +344,23 @@ export default function Sessions() {
         }
         onClick={(e) => toggleHealth(h, e)}
       />
+      {h.hostkey_status && h.hostkey_status !== 'ok' && (
+        <span
+          className={`h-2 w-2 rounded-full shrink-0 ${
+            h.hostkey_status === 'changed' ? 'bg-red-500 animate-pulse'
+            : h.hostkey_status === 'untrusted' ? 'bg-amber-400'
+            : 'bg-zinc-600'
+          }`}
+          title={
+            h.hostkey_status === 'changed'
+              ? 'HOST KEY CHANGED — possible MITM or reinstall (see audit log)'
+              : h.hostkey_status === 'untrusted'
+                ? 'host key not yet trusted'
+                : `host-key check: ${h.hostkey_status}`
+          }
+        />
+      )}
+      />
       <div className="min-w-0 flex-1">
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {h.name}
