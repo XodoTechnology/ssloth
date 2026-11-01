@@ -103,7 +103,7 @@ impl PreviewService {
             if states.values().filter(|s| s.running()).count() >= MAX_CAPTURES {
                 return Err("two previews are already being captured; try again when one finishes".into());
             }
-            let initial = if manual && matches!(known, Some(Family::Ilo4 | Family::Avocent)) {
+            let initial = if manual && matches!(known, Some(Family::Ilo4 | Family::Ilo5 | Family::Avocent | Family::Cimc)) {
                 PreviewState::SessionCapture
             } else {
                 PreviewState::Loading
@@ -181,6 +181,41 @@ pub fn capture(req: &CaptureRequest, exclusive: &dyn Fn()) -> PreviewState {
         }
         Family::Ilo4 if !u.is_empty() => PreviewState::OnDemand(
             "iLO has no snapshot endpoint; capture opens a temporary console".into()),
+        // iLO 5: same story — the only image is a live console capture.
+        Family::Ilo5 if !u.is_empty() && manual => {
+            exclusive();
+            match crate::families::ilo4::login(addr, u, pw) {
+                Ok(sess) => {
+                    let img = crate::families::ilo5::kvm::snapshot(
+                        addr, &sess.key, std::time::Duration::from_secs(10));
+                    crate::families::ilo4::logout(addr, &sess.key);
+                    match img {
+                        Ok(i) => PreviewState::Image(i.width, i.height, Arc::new(i.rgb)),
+                        Err(e) => PreviewState::Unavailable(e.to_string()),
+                    }
+                }
+                Err(e) => PreviewState::Unavailable(e.to_string()),
+            }
+        }
+        Family::Ilo5 if !u.is_empty() => PreviewState::OnDemand(
+            "iLO has no snapshot endpoint; capture opens a temporary console".into()),
+        // CIMC: no web preview endpoint either — capture opens the console.
+        Family::Cimc if !u.is_empty() && manual => {
+            exclusive();
+            match crate::families::cimc::login(addr, u, pw) {
+                Ok(sess) => {
+                    let img = crate::families::cimc::preview(addr, &sess);
+                    crate::families::cimc::logout(addr, &sess);
+                    match img {
+                        Ok(i) => PreviewState::Image(i.width, i.height, Arc::new(i.rgb)),
+                        Err(e) => PreviewState::Unavailable(e.to_string()),
+                    }
+                }
+                Err(e) => PreviewState::Unavailable(e.to_string()),
+            }
+        }
+        Family::Cimc if !u.is_empty() => PreviewState::OnDemand(
+            "CIMC has no snapshot endpoint; capture opens a temporary console".into()),
         // MergePoint's dashboard endpoint forces the BMC to capture a
         // fresh frame using the same scarce resource as KVM. On the
         // tested firmware it disconnects an active console, so never
@@ -215,7 +250,7 @@ pub fn capture(req: &CaptureRequest, exclusive: &dyn Fn()) -> PreviewState {
                 Err(e) => PreviewState::Unavailable(e.to_string()),
             }
         }
-        Family::Idrac9 | Family::Idrac8 | Family::Aten | Family::Ilo4 | Family::Avocent =>
+        Family::Idrac9 | Family::Idrac8 | Family::Aten | Family::Ilo4 | Family::Ilo5 | Family::Avocent | Family::Cimc =>
             PreviewState::Unavailable("no credentials".into()),
         f => PreviewState::Unavailable(
             format!("{} has no snapshot endpoint", f.label())),
