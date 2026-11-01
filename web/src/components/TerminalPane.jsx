@@ -344,6 +344,9 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
         case 'playbook_step':
           setPaneState({ playbook: { index: msg.index, total: msg.total, status: msg.status, command: msg.command } });
           break;
+        case 'watch_hit':
+          toast(`watch: ${msg.label}`, 'warn');
+          break;
         case 'playbook_done':
           setPaneState({ playbook: null });
           toast(msg.aborted ? 'playbook stopped' : msg.ok ? 'playbook finished' : 'playbook failed', msg.ok ? 'success' : 'error');

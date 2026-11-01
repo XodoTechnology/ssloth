@@ -158,6 +158,16 @@ ensureColumn('hosts', 'jump_host_id', 'jump_host_id INTEGER REFERENCES hosts(id)
 ensureColumn('hosts', 'connect_cmd', 'connect_cmd TEXT');
 ensureColumn('hosts', 'hostkey_status', 'hostkey_status TEXT');
 ensureColumn('hosts', 'hostkey_checked_at', 'hostkey_checked_at INTEGER');
+db.exec(`CREATE TABLE IF NOT EXISTS watches (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL,
+  host_id     INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL,
+  pattern     TEXT NOT NULL,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_watches_user ON watches(user_id)');
 ensureColumn('hosts', 'record', 'record INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');

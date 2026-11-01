@@ -391,6 +391,17 @@ const REPLAY_CAP = 1024 * 1024;
 // viewers, the asciinema recorder, and the capped replay buffer that powers
 // late-joining viewers *and* reattach scrollback.
 function sessionOutput(session, chunk) {
+  try {
+    const hits = require('../watch').check(session.userId, session.hostId, chunk.toString());
+    for (const w of hits) {
+      for (const v of session.viewers) {
+        try { v.send(JSON.stringify({ type: 'watch_hit', label: w.label })); } catch {}
+      }
+      if (session.ws) {
+        try { session.ws.send(JSON.stringify({ type: 'watch_hit', label: w.label })); } catch {}
+      }
+    }
+  } catch {}
   // Only consumers count as activity — a detached `top` session must still
   // hit the detached-session TTL rather than churning forever.
   if (session.ws || session.viewers.size > 0) session.lastUsed = Date.now();

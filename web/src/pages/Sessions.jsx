@@ -905,6 +905,24 @@ export default function Sessions() {
                 {label}
               </button>
             ))}
+            <div className="my-1 border-t border-ink-800" />
+            <button
+              className="w-full px-3 py-1.5 text-left hover:bg-ink-800"
+              onClick={async () => {
+                const h = powerMenu.host;
+                setPowerMenu(null);
+                const pattern = window.prompt(`Regex to watch for in ${h.name}'s output`, 'error|failed|panic');
+                if (!pattern) return;
+                try {
+                  await api('/api/watches', { method: 'POST', body: { host_id: h.id, label: pattern, pattern } });
+                  toast(`watching ${h.name} for /${pattern}/i`, 'success');
+                } catch (e) {
+                  toast(e.message, 'error');
+                }
+              }}
+            >
+              Add output watch…
+            </button>
           </div>
         </div>
       )}
