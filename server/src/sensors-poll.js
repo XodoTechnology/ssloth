@@ -23,6 +23,11 @@ function getHistory(hostId) {
   return history.get(hostId) || [];
 }
 
+function latest(hostId) {
+  const arr = history.get(hostId);
+  return arr && arr.length ? arr[arr.length - 1] : null;
+}
+
 function specFor(hostRow) {
   const spec = resolveConnectSpec(hostRow.user_id, { hostId: hostRow.id });
   applyRoutes(resolveConnectSpec, hostRow.user_id, spec);
@@ -33,7 +38,7 @@ async function sweep() {
   if (!bmc) return;
   let hosts;
   try {
-    hosts = db.prepare("SELECT id, user_id FROM hosts WHERE protocol = 'bmc'").all();
+    hosts = db.prepare("SELECT id, user_id FROM hosts WHERE protocol = 'bmc' AND COALESCE(sensor_exclude,0) = 0").all();
   } catch { return; }
   for (const h of hosts) {
     try {
@@ -54,4 +59,4 @@ function start() {
   timer.unref?.();
 }
 
-module.exports = { record, getHistory, start };
+module.exports = { record, getHistory, latest, start };

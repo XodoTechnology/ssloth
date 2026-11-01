@@ -110,6 +110,7 @@ app.use('/api/tunnels', requireAuth, requireWrite, tunnelRoutes);
 app.use('/api/shares', requireAuth, requireWrite, shareRoutes);
 app.use('/api/recordings', requireAuth, requireWrite, recordingRoutes);
 app.use('/api/watches', requireAuth, requireWrite, watchRoutes);
+app.use('/api/bmc', requireAuth, requireWrite, require('./routes/bmc'));
 app.use('/api/playbooks', requireAuth, requireWrite, playbookRoutes);
 app.use('/api/vault', requireAuth, requireWrite, backupRoutes);
 app.use('/api/webhooks', requireAuth, requireWrite, webhookRoutes);

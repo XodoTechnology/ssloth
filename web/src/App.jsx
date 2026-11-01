@@ -8,6 +8,7 @@ import IdleLock from './components/IdleLock';
 import SnippetVarPrompt from './components/SnippetVarPrompt';
 import Login from './pages/Login';
 import Sessions from './pages/Sessions';
+import BmcDashboard from './pages/BmcDashboard';
 import Vault from './pages/Vault';
 import Snippets from './pages/Snippets';
 import Playbooks from './pages/Playbooks';
@@ -78,6 +79,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Sessions />} />
+            <Route path="bmc" element={<BmcDashboard />} />
           <Route path="/vault" element={<Vault />} />
           <Route path="/snippets" element={<Snippets />} />
           <Route path="/playbooks" element={<Playbooks />} />

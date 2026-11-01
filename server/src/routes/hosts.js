@@ -84,6 +84,9 @@ function cleanHostInput(body, { partial = false } = {}) {
     const cmd = String(body.connect_cmd || '').trim();
     out.connect_cmd = cmd.length > 500 ? cmd.slice(0, 500) : cmd;
   }
+  if (!partial || body.sensor_exclude !== undefined) {
+    out.sensor_exclude = body.sensor_exclude ? 1 : 0;
+  }
   // Secret fields are only updated when explicitly provided.
   if (body.password !== undefined) {
     out.password_enc = body.password ? encryptSecret(String(body.password)) : null;

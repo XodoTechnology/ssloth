@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
+  Activity,
   Terminal,
   KeyRound,
   Zap,
@@ -19,6 +20,7 @@ import TransfersTray from './TransfersTray';
 
 const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
+  { to: '/bmc', label: 'BMC', icon: Activity },
   { to: '/vault', label: 'Vault', icon: KeyRound },
   { to: '/snippets', label: 'Snippets', icon: Zap },
   { to: '/playbooks', label: 'Playbooks', icon: ListChecks },
