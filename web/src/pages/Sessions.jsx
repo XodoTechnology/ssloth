@@ -50,6 +50,7 @@ export default function Sessions() {
   const [tabMenu, setTabMenu] = useState(null); // {x, y, tab} right-click menu
   const [powerMenu, setPowerMenu] = useState(null); // {x, y, host} bmc power menu
   const [bmcView, setBmcView] = useState(null); // {host, kind: 'sel'|'sensors'|'detect', data, loading, error}
+  const [sensorHistory, setSensorHistory] = useState([]);
   const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
   const [workspaces, setWorkspaces] = useState(null);
 
@@ -928,6 +929,9 @@ export default function Sessions() {
           {bmcView.data?.warnings?.length > 0 && (
             <p className="text-[11px] text-amber-400">{bmcView.data.warnings.join('; ')}</p>
           )}
+          {bmcView.kind === 'sensors' && bmcView.data && (
+            <SensorHistory host={bmcView.host} samples={sensorHistory} setSamples={setSensorHistory} />
+          )}
         </Modal>
       )}
 
@@ -964,6 +968,54 @@ function HealthSpark({ rows }) {
           style={{ height: r.ok ? `${Math.max(18, Math.round((Math.log2(1 + r.latency_ms) / Math.log2(1 + maxMs)) * 100))}%` : '100%' }}
         />
       ))}
+    </div>
+  );
+}
+
+function SensorHistory({ host, samples, setSamples }) {
+  useEffect(() => {
+    let dead = false;
+    api(`/api/hosts/${host.id}/sensors/history`)
+      .then((j) => { if (!dead) setSamples(j.samples || []); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [host.id]);
+  const series = new Map();
+  for (const s of samples || []) {
+    for (const e of s.entries || []) {
+      const v = parseFloat(e.reading);
+      if (!Number.isFinite(v)) continue;
+      if (!series.has(e.name)) series.set(e.name, []);
+      series.get(e.name).push(v);
+    }
+  }
+  const rows = [...series.entries()].filter(([, v]) => v.length >= 3);
+  if (!rows.length) return null;
+  return (
+    <div className="mt-3">
+      <p className="label">history — {samples.length} sample{samples.length === 1 ? '' : 's'}</p>
+      <div className="grid grid-cols-2 gap-2">
+        {rows.map(([name, vals]) => <Sparkline key={name} name={name} vals={vals} />)}
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ name, vals }) {
+  const w = 160, h = 28;
+  const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
+  const pts = vals
+    .map((v, i) => `${((i / (vals.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`)
+    .join(' ');
+  return (
+    <div className="rounded border border-ink-800 px-2 py-1">
+      <div className="flex justify-between text-[10px] text-zinc-500">
+        <span>{name}</span>
+        <span className="text-zinc-300">{vals[vals.length - 1]}</span>
+      </div>
+      <svg width={w} height={h} className="text-accent-400">
+        <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
     </div>
   );
 }

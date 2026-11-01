@@ -193,6 +193,7 @@ server.on('upgrade', (req, socket, head) => {
 
 startScheduler();
 startSweeper();
+require('./sensors-poll').start();
 
 server.listen(PORT, BIND, () => {
   const addr = server.address();

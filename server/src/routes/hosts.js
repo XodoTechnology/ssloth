@@ -10,6 +10,7 @@ const { encryptSecret } = require('../crypto');
 const { auditReq } = require('../auth');
 const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey, resolveConnectSpec } = require('../ssh/manager');
 const { bmc, bmcError, applyRoutes } = require('../bmc');
+const sensorsPoll = require('../sensors-poll');
 const { scanHostKey } = require('../ssh/keyscan');
 const { getHealthHistory, latestHealth } = require('../health');
 
@@ -425,10 +426,16 @@ router.get('/:id/sel', async (req, res) => {
 router.get('/:id/sensors', async (req, res) => {
   if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
   try {
-    res.json(JSON.parse(await bmc.readSensors(bmcSpec(req))));
+    const s = JSON.parse(await bmc.readSensors(bmcSpec(req)));
+    sensorsPoll.record(parseInt(req.params.id, 10), s);
+    res.json(s);
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+router.get('/:id/sensors/history', (req, res) => {
+  res.json({ samples: sensorsPoll.getHistory(parseInt(req.params.id, 10)) });
 });
 
 router.get('/:id/bmc-detect', async (req, res) => {
