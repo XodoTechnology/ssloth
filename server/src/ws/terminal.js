@@ -306,6 +306,7 @@ function handleTerminalWs(ws, req, user) {
         }
         send({ type: 'ready', sessionId: sess.id, label: spec.label });
         if (spec.record) startRecording();
+        if (spec.connectCmd) stream.write(spec.connectCmd + '\n');
         const onOut = (chunk) => {
           sessionOutput(sess, chunk);
         };

@@ -23,6 +23,7 @@ export default function HostForm({ host, onClose, onSaved }) {
     protocol: host?.protocol || 'ssh',
     mac: host?.mac || '',
     agent_forward: !!host?.agent_forward,
+    connect_cmd: host?.connect_cmd || '',
     auth_type: host?.auth_type || 'credential',
     credential_id: host?.credential_id || '',
     jump_host_id: host?.jump_host_id || '',
@@ -54,6 +55,7 @@ export default function HostForm({ host, onClose, onSaved }) {
         protocol: form.protocol,
         mac: form.mac,
         agent_forward: form.protocol === 'ssh' && !!form.agent_forward,
+        connect_cmd: form.protocol === 'ssh' ? form.connect_cmd : null,
         auth_type: form.auth_type,
         credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
         jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
@@ -250,6 +252,26 @@ export default function HostForm({ host, onClose, onSaved }) {
                 </option>
               ))}
           </select>
+        </div>
+        )}
+        {form.protocol === 'ssh' && (
+        <div>
+          <div className="flex items-center gap-3">
+            <label className="label">On-connect command (optional)</label>
+            <button
+              type="button"
+              className="text-xs text-accent-400 hover:text-accent-300"
+              onClick={() => setForm((f) => ({ ...f, connect_cmd: 'tmux -u -CC attach || tmux -u -CC' }))}
+            >
+              attach to tmux
+            </button>
+          </div>
+          <input
+            className="input"
+            placeholder="e.g. tmux -u -CC attach || tmux -u -CC"
+            value={form.connect_cmd}
+            onChange={set('connect_cmd')}
+          />
         </div>
         )}
         <div className="flex items-end pb-1 gap-5">

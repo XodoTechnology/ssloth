@@ -155,6 +155,7 @@ function ensureColumn(table, column, ddl) {
   }
 }
 ensureColumn('hosts', 'jump_host_id', 'jump_host_id INTEGER REFERENCES hosts(id) ON DELETE SET NULL');
+ensureColumn('hosts', 'connect_cmd', 'connect_cmd TEXT');
 ensureColumn('hosts', 'record', 'record INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('hosts', 'last_used_at', 'last_used_at INTEGER');

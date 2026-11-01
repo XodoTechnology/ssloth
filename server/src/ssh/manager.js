@@ -89,6 +89,7 @@ function resolveConnectSpec(userId, input) {
     record: !!host.record,
     protocol: host.protocol || 'ssh',
     agentForward: !!host.agent_forward,
+    connectCmd: host.connect_cmd || null,
   };
 
   if (host.auth_type === 'credential' && host.credential_id) {

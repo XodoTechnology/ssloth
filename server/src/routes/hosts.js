@@ -79,6 +79,10 @@ function cleanHostInput(body, { partial = false } = {}) {
   if (!partial || body.agent_forward !== undefined) {
     out.agent_forward = body.agent_forward ? 1 : 0;
   }
+  if (!partial || body.connect_cmd !== undefined) {
+    const cmd = String(body.connect_cmd || '').trim();
+    out.connect_cmd = cmd.length > 500 ? cmd.slice(0, 500) : cmd;
+  }
   // Secret fields are only updated when explicitly provided.
   if (body.password !== undefined) {
     out.password_enc = body.password ? encryptSecret(String(body.password)) : null;
