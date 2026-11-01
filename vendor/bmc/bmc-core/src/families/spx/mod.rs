@@ -97,7 +97,13 @@ fn https(
     body: Option<(&str, &str)>,
 ) -> std::io::Result<(u16, String, String)> {
     let mut s = tls(host)?;
-    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
+    // A browser-like header set: some SP-X firmware 500s on requests with
+    // no User-Agent/Accept, and newer revs CSRF-check Origin/Referer.
+    let mut req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\
+         User-Agent: Mozilla/5.0 (ssloth-bmc)\r\nAccept: application/json, */*\r\n\
+         Origin: https://{host}\r\nReferer: https://{host}/\r\n"
+    );
     if let Some(sess) = sess {
         req.push_str(&format!("Cookie: {}\r\n", sess.cookie));
         req.push_str(&format!("X-CSRFTOKEN: {}\r\n", sess.csrf));
