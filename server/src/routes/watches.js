@@ -1,6 +1,6 @@
 // Output-watch CRUD: user-scoped regexes matched against session output.
 const express = require('express');
-const db = require('../db');
+const { db } = require('../db');
 const { auditReq } = require('../auth');
 const { invalidate } = require('../watch');
 

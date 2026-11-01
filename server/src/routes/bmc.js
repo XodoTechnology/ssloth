@@ -1,7 +1,7 @@
 // BMC fleet overview: one call → every BMC host's monitoring state (latest
 // sensor sample, host-key status, exclusion flag) for the dashboard page.
 const express = require('express');
-const db = require('../db');
+const { db } = require('../db');
 const sensorsPoll = require('../sensors-poll');
 
 const router = express.Router();

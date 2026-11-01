@@ -3,7 +3,7 @@
 // (and recording) sees it; the matcher is cheap — compiled regexes cached
 // per user, refreshed whenever the table changes.
 
-const db = require('./db');
+const { db } = require('./db');
 
 const cache = new Map(); // userId -> {at, list:[{id,host_id,label,re}]}
 const TTL_MS = 30 * 1000;

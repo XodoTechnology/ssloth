@@ -3,7 +3,7 @@
 // key outside of a legitimate reinstall) is the classic MITM signature, so it
 // surfaces on the host card and in the audit log rather than failing silently.
 
-const db = require('./db');
+const { db } = require('./db');
 const { scanHostKey } = require('./ssh/keyscan');
 const { audit } = require('./db');
 

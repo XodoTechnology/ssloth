@@ -4,7 +4,7 @@
 // nothing extra hits the BMC's session pool when nobody is looking.
 
 const { bmc, applyRoutes } = require('./bmc');
-const db = require('./db');
+const { db } = require('./db');
 const { resolveConnectSpec } = require('./ssh/manager');
 
 const SAMPLES_PER_HOST = 200; // ~16h at the 5-min sweep
