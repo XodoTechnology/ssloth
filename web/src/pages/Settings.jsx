@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Activity,
   Settings as SettingsIcon,
   ShieldCheck,
   Fingerprint,
@@ -554,22 +555,31 @@ export default function Settings() {
               <option value="15">15 minutes</option>
               <option value="30">30 minutes</option>
             </select>
-          </div>
-          <div>
-            <label className="label">BMC dashboard nav</label>
-            <select
-              className="input"
-              defaultValue={localStorage.getItem('ssloth.bmcNav') || 'auto'}
-              onChange={(e) => localStorage.setItem('ssloth.bmcNav', e.target.value)}
-            >
-              <option value="auto">Auto (only when BMC hosts exist)</option>
-              <option value="1">Always show</option>
-              <option value="0">Never show</option>
-              <option value="60">1 hour</option>
-            </select>
             <span className="text-[11px] text-zinc-500">
               locks the screen after inactivity — SSH sessions keep running; unlock with
               {desktop && pinSet ? ' your PIN or ' : ' '}account password
+            </span>
+          </div>
+        </section>
+
+        {/* BMC nav visibility */}
+        <section className="card p-4">
+          <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Activity size={15} className="text-emerald-400" /> BMC dashboard
+          </h2>
+          <div>
+            <label className="label">Show in nav</label>
+            <select
+              className="input !w-48"
+              defaultValue={localStorage.getItem('ssloth.bmcNav') || 'auto'}
+              onChange={(e) => localStorage.setItem('ssloth.bmcNav', e.target.value)}
+            >
+              <option value="auto">Auto (when BMC hosts exist)</option>
+              <option value="1">Always</option>
+              <option value="0">Never</option>
+            </select>
+            <span className="text-[11px] text-zinc-500">
+              per-browser — controls the fleet monitoring page in the left nav
             </span>
           </div>
         </section>
