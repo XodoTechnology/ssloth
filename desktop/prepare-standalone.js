@@ -137,11 +137,18 @@ async function main() {
   if (PLATFORM === 'win32') {
     const zip = path.join(STAGE, 'node.zip');
     await dl(`https://nodejs.org/dist/${tag}/${name}.zip`, zip);
-    // Windows runners guarantee bsdtar (system32\tar.exe); unix hosts have unzip
-    if (process.platform === 'win32') {
-      run('tar', ['-xf', zip, '-C', nodeDir, '--strip-components=1', `${name}/node.exe`]);
-    } else {
-      run('unzip', ['-o', '-j', zip, `${name}/node.exe`, '-d', nodeDir]);
+    // unzip exists on unix and in Git-for-Windows' usr/bin; on runners where
+    // it doesn't, Expand-Archive is guaranteed. GNU tar can't read zips —
+    // never hand it one. Verify the result either way: an empty node dir
+    // used to stage silently and package a runtime-less app.
+    let r = run('unzip', ['-o', '-j', zip, `${name}/node.exe`, '-d', nodeDir]);
+    if (r.status !== 0 && process.platform === 'win32') {
+      run('powershell', [
+        '-NoProfile', '-Command',
+        `Expand-Archive -Path '${zip}' -DestinationPath '${path.join(STAGE, 'nodezip')}' -Force`,
+      ]);
+      const extracted = path.join(STAGE, 'nodezip', name, 'node.exe');
+      if (fs.existsSync(extracted)) fs.copyFileSync(extracted, path.join(nodeDir, 'node.exe'));
     }
     fs.unlinkSync(zip);
   } else {
@@ -149,6 +156,11 @@ async function main() {
     await dl(`https://nodejs.org/dist/${tag}/${name}.tar.gz`, tgzN);
     run('tar', ['-xzf', tgzN, '-C', nodeDir, '--strip-components=2', `${name}/bin/node`]);
     fs.unlinkSync(tgzN);
+  }
+  const rt = path.join(nodeDir, PLATFORM === 'win32' ? 'node.exe' : 'node');
+  if (!fs.existsSync(rt)) {
+    console.error(`node runtime staging failed — ${rt} was not produced`);
+    process.exit(1);
   }
 
   // 6. build provenance — shown in-app (About dialog + footer)
