@@ -194,6 +194,7 @@ server.on('upgrade', (req, socket, head) => {
 startScheduler();
 startSweeper();
 require('./sensors-poll').start();
+require('./hostkey-monitor').start();
 
 server.listen(PORT, BIND, () => {
   const addr = server.address();
