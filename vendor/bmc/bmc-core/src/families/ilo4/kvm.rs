@@ -164,6 +164,15 @@ pub fn hold_session(host: &str, session_key: &str, seize: bool) -> std::io::Resu
 pub fn snapshot(host: &str, session_key: &str, budget: Duration)
     -> std::io::Result<crate::image::Image>
 {
+    let kvm = open(host, session_key, KVM_CHANNEL, false)?;
+    snapshot_from(kvm, budget)
+}
+
+/// The snapshot loop, on an already-open channel — iLO 5's v5 handshake opens
+/// the channel differently; the stream after it is the same.
+pub(crate) fn snapshot_from(mut kvm: WebSocket, budget: Duration)
+    -> std::io::Result<crate::image::Image>
+{
     /// How long the stream must go quiet before the screen counts as drawn.
     const SETTLED: Duration = Duration::from_millis(400);
     /// What counts as a message that redrew something substantial. The opening
@@ -171,7 +180,6 @@ pub fn snapshot(host: &str, session_key: &str, budget: Duration)
     /// 7 to 10 bytes and would otherwise keep the screen looking "busy" forever.
     const SUBSTANTIAL: usize = 64;
 
-    let mut kvm = open(host, session_key, KVM_CHANNEL, false)?;
     kvm.set_poll_timeout(Duration::from_millis(50)).ok();
     let mut fb = crate::ast2100::Decoder::new(1024, 768);
     let mut dvc = crate::ilo_dvc::Dvc::new();

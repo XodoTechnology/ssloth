@@ -795,6 +795,208 @@ which ends every console session.".into();
     })
 }
 
+fn ilo5_connect(host: &str, user: &str, pass: &str, progress: &Arc<Mutex<String>>, seize: bool,
+                td: &mut Teardown)
+    -> Result<ConnectOk, String>
+{
+    use crate::families::ilo4::{self, kvm as ilo4_kvm};
+    use crate::families::ilo5::kvm as ilo5_kvm;
+    let say = |m: &str| { *progress.lock().unwrap() = m.to_string(); };
+
+    say("iLO: logging in…");
+    let sess = ilo4::login(host, user, pass).map_err(|e| e.to_string())?;
+    // Logged out however this ends, a failed connect included: iLO keeps
+    // only a handful of web sessions, and a stranded one holds its slot for
+    // the 30-minute idle timeout.
+    let (out_host, out_key) = (host.to_string(), sess.key.clone());
+    td.push_as("iLO web session", move || { ilo4::logout(&out_host, &out_key); Vec::new() });
+    if !sess.remote_console {
+        return Err("this account lacks the Remote Console privilege".into());
+    }
+    let info = ilo4::detect(host);
+
+    // Not seizing unless asked: a console in use is reported, and the connecting
+    // screen offers "Take over" — iLO's own client asks before it acquires too.
+    say("iLO: opening console channel…");
+    let mut kvm = ilo5_kvm::open(host, &sess.key, ilo5_kvm::KVM_CHANNEL, seize)
+        .map_err(|e| format!("console channel: {e}"))?;
+    say("iLO: opening command channel…");
+    let mut cmd = match ilo5_kvm::open(host, &sess.key, ilo5_kvm::CMD_CHANNEL, seize) {
+        Ok(c) => c,
+        Err(e) => {
+            kvm.close();
+            return Err(format!("command channel: {e}"));
+        }
+    };
+
+    // Short poll timeouts keep input latency down on an otherwise idle screen.
+    kvm.set_poll_timeout(std::time::Duration::from_millis(20)).ok();
+    cmd.set_poll_timeout(std::time::Duration::from_millis(200)).ok();
+
+    let decoder = Arc::new(Mutex::new(ast2100::Decoder::new(1024, 768)));
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let alive = Arc::new(AtomicBool::new(true));
+    let notice = Arc::new(Mutex::new(String::new()));
+    let (net, rtt, frame) = trackers();
+
+    // Video + input.
+    // Why the console ended, when the iLO says: the video channel's own
+    // session-end command, a reset, or a take-over this user granted.
+    let ended: Arc<Mutex<String>> = Default::default();
+    let why = ended.clone();
+    let (dec, live) = (decoder.clone(), alive.clone());
+    let frames = latency::Intervals::new(frame.clone());
+    std::thread::spawn(move || {
+        use crate::ilo_dvc::Event;
+        let mut dvc = crate::ilo_dvc::Dvc::new();
+        // Start from a known keyboard state and ask for a full frame.
+        let _ = kvm.send_binary(&ilo4_kvm::all_keys_up());
+        let _ = kvm.send_binary(&ilo4_kvm::refresh());
+        while live.load(Ordering::SeqCst) {
+            while let Ok(b) = rx.try_recv() {
+                if kvm.send_binary(&b).is_err() {
+                    live.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+            let msg = match kvm.poll() {
+                Ok(Some(m)) => m,
+                Ok(None) => continue,
+                Err(_) => { live.store(false, Ordering::SeqCst); break; }
+            };
+            let before = dec.lock().unwrap().frames;
+            let events = dvc.process(&msg, &mut dec.lock().unwrap());
+            if dec.lock().unwrap().frames > before {
+                frames.tick();
+            }
+            for e in events {
+                let out = match e {
+                    // The BMC withholds further video until we acknowledge.
+                    Event::SendAck => Some(ilo4_kvm::ack()),
+                    Event::Refresh => Some(ilo4_kvm::refresh()),
+                    Event::Exit => {
+                        let mut w = why.lock().unwrap();
+                        if w.is_empty() { *w = "The iLO ended the console session.".into(); }
+                        drop(w);
+                        live.store(false, Ordering::SeqCst);
+                        break;
+                    }
+                    _ => None,
+                };
+                if let Some(b) = out {
+                    if kvm.send_binary(&b).is_err() {
+                        live.store(false, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+        }
+        // Always close: the BMC holds the console session open otherwise.
+        kvm.close();
+    });
+
+    // iLO expires idle web sessions, and virtual media authenticates with the
+    // same key, so keep it warm for as long as the console is up.
+    let (live3, key) = (alive.clone(), sess.key.clone());
+    let tick_host = host.to_string();
+    std::thread::spawn(move || {
+        while live3.load(Ordering::SeqCst) {
+            for _ in 0..150 {
+                if !live3.load(Ordering::SeqCst) { return; }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            if !ilo4::tickle(&tick_host, &key) { return; }
+        }
+    });
+
+    // Notifications: power/health/POST code, and requests from other users.
+    let (live2, note, why2) = (alive.clone(), notice.clone(), ended.clone());
+    let takeover: TakeoverSlot = Default::default();
+    let slot = takeover.clone();
+    // Answers to takeover requests go back on this channel: the command socket
+    // belongs to this thread, and a TLS stream cannot be shared across threads.
+    let (answer_tx, answer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        use crate::families::ilo4::kvm::Event;
+        while live2.load(Ordering::SeqCst) {
+            while let Ok(b) = answer_rx.try_recv() {
+                let _ = cmd.send_binary(&b);
+            }
+            let msg = match cmd.poll() {
+                Ok(Some(m)) => m,
+                Ok(None) => continue,
+                Err(_) => break, // the video channel decides when we're done
+            };
+            let Some(n) = ilo4_kvm::parse_notification(&msg) else { continue };
+            let set = |m: String| { *note.lock().unwrap() = m; };
+            match ilo4_kvm::interpret(&n) {
+                Event::Power(on) => set(format!("power {}", if on { "on" } else { "off" })),
+                Event::Health(h) => set(format!("health {h}")),
+                Event::PostCode(c) => set(format!("POST {c}")),
+                Event::PostComplete => set("POST complete".into()),
+                Event::MediaResult { ok, reason, connected, .. } => set(if ok {
+                    format!("virtual media {}", if connected { "connected" } else { "disconnected" })
+                } else {
+                    format!("virtual media: {reason}")
+                }),
+                // Take-over: ask, as the vendor console does — and, like it,
+                // hand the console over if nobody answers within 10 seconds, so an
+                // unattended session does not lock everyone else out.
+                Event::SeizeRequest { user, addr } => {
+                    let (tx, why3, taker) = (answer_tx.clone(), why2.clone(), user.clone());
+                    slot.post(Takeover {
+                        question: format!("{user} wants to take over this console. Yours will close."),
+                        user, addr,
+                        answers: vec![(ShareAnswer::Full, "Give it to them"), (ShareAnswer::Deny, "Keep it")],
+                        lasts: std::time::Duration::from_secs(10),
+                        on_timeout: Some(ShareAnswer::Full),
+                        respond: Box::new(move |a| {
+                            if a == ShareAnswer::Full {
+                                *why3.lock().unwrap() = format!("You gave the console to {taker}.");
+                            }
+                            let _ = tx.send(if a == ShareAnswer::Full { ilo4_kvm::grant() } else { ilo4_kvm::deny() });
+                        }),
+                    });
+                }
+                // Sharing would need this client to relay the video to them, which
+                // it cannot; the vendor's HTML5 console declines these too.
+                Event::ShareRequest { user, addr } => {
+                    let _ = cmd.send_binary(&ilo4_kvm::deny());
+                    set(format!("declined {user} ({addr}): this client cannot share the console"));
+                }
+                Event::Unauthorized(p) => set(format!("not authorised for {p}")),
+                Event::LicenseViolation => set("console is not licensed".into()),
+                Event::FirmwareUpdate | Event::IloReset => {
+                    set("iLO is restarting".into());
+                    *why2.lock().unwrap() = "The iLO is restarting (a reset or a firmware update), \
+which ends every console session.".into();
+                    live2.store(false, Ordering::SeqCst);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        cmd.close();
+    });
+
+    let title = match &info {
+        Some(i) => format!("iLO 5 · {} · fw {}", i.model, i.firmware),
+        None => format!("iLO 5 · {host}"),
+    };
+    Ok(ConnectOk {
+        decoder, link: FamilyLink::new(tx, alive), title,
+        family: Family::Ilo5,
+        kvm_token: sess.key,
+        notice,
+        takeover,
+        ended,
+        idrac: None,
+        avocent: None,
+        spx: None,
+        net, rtt, frame,
+    })
+}
+
 /// Connect a Dell iDRAC 9 virtual console.
 ///
 /// Unlike the other three families this is plain RFB — the BMC runs a VNC server
@@ -1026,6 +1228,7 @@ fn connect_family(a: &Attempt, td: &mut Teardown) -> Result<ConnectOk, String> {
     match family {
         Family::Idrac9 => return idrac_connect(host, user, pass, progress, td),
         Family::Ilo4 => return ilo4_connect(host, user, pass, progress, a.seize, td),
+        Family::Ilo5 => return ilo5_connect(host, user, pass, progress, a.seize, td),
         // Detection cannot see an OEM brand without logging in; the
         // inventory, which the probe filled in, already knows it.
         Family::Quanta => return quanta_connect(host, user, pass, progress,

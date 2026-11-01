@@ -8,6 +8,7 @@ pub mod avocent;
 pub mod idrac;
 pub mod idrac8;
 pub mod ilo4;
+pub mod ilo5;
 pub mod probe;
 pub mod quanta;
 pub mod spx;
@@ -21,6 +22,7 @@ pub enum Family {
     Quanta,
     /// HP iLO 4: Integrated Remote Console over WebSocket, URL-based vmedia.
     Ilo4,
+    Ilo5,
     /// Dell iDRAC 9: standard RFB over WebSocket, Redfish for everything else.
     Idrac9,
     /// Dell iDRAC 7/8: Avocent APCP/AVSP on :5900 with DVC video, AVMP vmedia.
@@ -32,10 +34,11 @@ pub enum Family {
 }
 
 impl Family {
-    pub const ALL: [Family; 7] = [
+    pub const ALL: [Family; 8] = [
         Family::Aten,
         Family::Quanta,
         Family::Ilo4,
+        Family::Ilo5,
         Family::Idrac9,
         Family::Idrac8,
         Family::Spx,
@@ -47,6 +50,7 @@ impl Family {
             Family::Aten => "Supermicro / ATEN",
             Family::Quanta => "Quanta / AMI MegaRAC",
             Family::Ilo4 => "HP iLO 4",
+            Family::Ilo5 => "HP iLO 5",
             Family::Idrac9 => "Dell iDRAC 9",
             Family::Idrac8 => "Dell iDRAC 8",
             Family::Spx => "ASRock Rack / AMI SP-X",
@@ -61,6 +65,7 @@ impl Family {
             Family::Aten => [0x6C, 0xA8, 0x6C],
             Family::Quanta => [0xC2, 0x8B, 0x5E],
             Family::Ilo4 => [0x5A, 0xA9, 0xC4],
+            Family::Ilo5 => [0x5A, 0xA9, 0xC4],
             Family::Idrac9 => [0x8C, 0x8C, 0xD4],
             Family::Idrac8 => [0x7A, 0x9A, 0xC8],
             Family::Spx => [0xC9, 0x6A, 0x6A],
@@ -75,6 +80,7 @@ impl Family {
             Family::Aten => "aten",
             Family::Quanta => "quanta",
             Family::Ilo4 => "ilo4",
+            Family::Ilo5 => "ilo5",
             Family::Idrac9 => "idrac9",
             Family::Idrac8 => "idrac8",
             Family::Spx => "spx",
@@ -218,7 +224,7 @@ impl Vendor {
         match self {
             Vendor::Supermicro => Family::Aten.tint(),
             Vendor::Ami | Vendor::Quanta => Family::Quanta.tint(),
-            Vendor::Hp => Family::Ilo4.tint(),
+            Vendor::Hp => Family::Ilo5.tint(),
             Vendor::Dell => Family::Idrac9.tint(),
             Vendor::Asrock => Family::Spx.tint(),
             Vendor::Gigabyte => Family::Avocent.tint(),
@@ -239,7 +245,7 @@ impl Family {
         match self {
             Family::Aten => Vendor::Supermicro,
             Family::Quanta => Vendor::Ami,
-            Family::Ilo4 => Vendor::Hp,
+            Family::Ilo4 | Family::Ilo5 => Vendor::Hp,
             Family::Idrac9 | Family::Idrac8 => Vendor::Dell,
             Family::Spx => Vendor::Ami,
             Family::Avocent => Vendor::Gigabyte,
@@ -302,6 +308,11 @@ fn detect_after_avocent(host: &str) -> Family {
     if ilo4::detect(host).is_some() {
         return Family::Ilo4;
     }
+    // Same probe shape as iLO 4, a different PN — checked after it so a
+    // Gen8/Gen9 never lands here.
+    if ilo5::detect(host).is_some() {
+        return Family::Ilo5;
+    }
     // The GoAhead MegaRAC generation has /rpc/WEBSES/create.asp and no
     // Redfish; SP-X is the reverse, so test the older stack first.
     if quanta::is_ami_megarac(host) {
@@ -318,7 +329,7 @@ fn detect_after_avocent(host: &str) -> Family {
 /// as a CD only — so a disk image (`.img`) is always proxied.
 pub fn native_url_media(family: Family, url: &str) -> bool {
     let img = crate::media_source::file_name(url).to_ascii_lowercase().ends_with(".img");
-    matches!(family, Family::Ilo4 | Family::Idrac9) && !img
+    matches!(family, Family::Ilo4 | Family::Ilo5 | Family::Idrac9) && !img
 }
 
 /// Hand `url` to the BMC to fetch, as its virtual CD. The returned mount
@@ -334,7 +345,7 @@ pub fn mount_url_native(family: Family, host: &str, user: &str, pass: &str, url:
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     match family {
-        Family::Ilo4 => ilo4::insert_media(host, user, pass, url, false)?,
+        Family::Ilo4 | Family::Ilo5 => ilo4::insert_media(host, user, pass, url, false)?,
         Family::Idrac9 => idrac::insert_media(host, user, pass, url)?,
         _ => return Err(std::io::Error::new(std::io::ErrorKind::Other,
             "this BMC cannot mount a URL itself")),
@@ -348,7 +359,7 @@ pub fn mount_url_native(family: Family, host: &str, user: &str, pass: &str, url:
         // Unmounting is the user's doing (an eject, a disconnect), begun
         // now, though this thread was started with the mount.
         let _ = crate::net::deliberately(|| match family {
-            Family::Ilo4 => ilo4::eject_media(&h, &u, &p),
+            Family::Ilo4 | Family::Ilo5 => ilo4::eject_media(&h, &u, &p),
             _ => idrac::eject_media(&h, &u, &p),
         });
     });

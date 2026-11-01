@@ -120,7 +120,7 @@ impl FamilyEncoder {
             }
             // iLO takes whole 8-byte HID reports rather than per-key events,
             // so the held set is resent whenever it changes.
-            Family::Ilo4 => out.push(ilo4::kvm::key_report(self.mods, &self.held_u8())),
+            Family::Ilo4 | Family::Ilo5 => out.push(ilo4::kvm::key_report(self.mods, &self.held_u8())),
             // AVSP sends one packet per key transition and carries no modifier
             // byte: the modifiers are ordinary usages, down and up like any other.
             Family::Avocent | Family::Idrac8 => out.push(avocent::kvm::key_packet(usage as u8, down)),
@@ -168,7 +168,7 @@ impl FamilyEncoder {
                 }
             }
             // iLO absolute mouse: x/y in 0..3000, buttons L=1 R=2 M=4.
-            Family::Ilo4 => {
+            Family::Ilo4 | Family::Ilo5 => {
                 use ilo4::kvm as ik;
                 let (ax, ay) = ((rx * ik::MOUSE_RANGE) as u16, (ry * ik::MOUSE_RANGE) as u16);
                 let b = (left as u8 * ik::BTN_LEFT) | (right as u8 * ik::BTN_RIGHT) | (mid as u8 * ik::BTN_MIDDLE);
@@ -224,7 +224,7 @@ impl FamilyEncoder {
         ups.extend((0..8u16).filter(|i| self.mods & (1 << i) != 0).map(|i| 0xe0 + i));
         self.mods = 0;
         match self.family {
-            Family::Ilo4 => out.push(ilo4::kvm::key_report(0, &[])),
+            Family::Ilo4 | Family::Ilo5 => out.push(ilo4::kvm::key_report(0, &[])),
             Family::Aten => out.extend(ups.iter().map(|&u| super::hid_event(u32::from(u), false).to_vec())),
             Family::Idrac9 => out.extend(ups.iter().filter_map(|&u| hid_to_keysym(u)).map(|ks| vnc::key_event(ks, false))),
             Family::Avocent | Family::Idrac8 => out.extend(ups.iter().map(|&u| avocent::kvm::key_packet(u as u8, false))),
@@ -253,7 +253,7 @@ impl FamilyEncoder {
                 if shift { out.push(vnc::key_event(super::MOD_SHIFT, false)); }
             }
             // Whole HID reports: the key with the Shift bit, then all up.
-            Family::Ilo4 => {
+            Family::Ilo4 | Family::Ilo5 => {
                 out.push(ilo4::kvm::key_report(if shift { 0x02 } else { 0 }, &[hid]));
                 out.push(ilo4::kvm::key_report(0, &[]));
             }
@@ -290,7 +290,7 @@ impl FamilyEncoder {
 
     fn ctrl_alt_del(&mut self, out: &mut Vec<Vec<u8>>) {
         match self.family {
-            Family::Ilo4 => out.extend(ilo4::kvm::ctrl_alt_del()),
+            Family::Ilo4 | Family::Ilo5 => out.extend(ilo4::kvm::ctrl_alt_del()),
             // X11 keysyms: Ctrl, Alt, Delete down then up.
             Family::Idrac9 => {
                 for (k, d) in [(0xffe3u32, true), (0xffe9, true), (0xffff, true),

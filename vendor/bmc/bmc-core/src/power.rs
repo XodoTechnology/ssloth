@@ -16,7 +16,7 @@ pub fn send_power(family: Family, h: &str, u: &str, p: &str, code: u8) -> String
     let r = match family {
         Family::Idrac9 => crate::families::idrac::power(h, u, p, cmd),
         Family::Idrac8 => crate::families::idrac8::power(h, u, p, cmd),
-        Family::Ilo4 => crate::families::ilo4::power(h, u, p, cmd),
+        Family::Ilo4 | Family::Ilo5 => crate::families::ilo4::power(h, u, p, cmd),
         Family::Quanta => crate::families::quanta::ipmi_power(h, u, p, cmd),
         // SP-X spells soft-off "softoff"; everything else shares the verbs.
         Family::Spx => crate::families::spx::power(
@@ -74,7 +74,7 @@ pub fn reset_bmc(addr: &str, u: &str, p: &str) -> String {
             Ok(_) => format!("iDRAC reset sent to {addr} (back in ~2 min)"),
             Err(e) => format!("iDRAC reset failed: {e}"),
         },
-        Family::Ilo4 => match crate::families::ilo4::reset_ilo(addr, u, p) {
+        Family::Ilo4 | Family::Ilo5 => match crate::families::ilo4::reset_ilo(addr, u, p) {
             Ok(_) => format!("iLO reset sent to {addr} (back in ~1 min)"),
             Err(e) => format!("iLO reset failed: {e}"),
         },

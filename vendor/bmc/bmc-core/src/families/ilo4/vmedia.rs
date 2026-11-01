@@ -124,6 +124,16 @@ pub fn drive_label(path: &str) -> &'static str {
 /// that allows it, so what the host writes lands in the image as it would on a
 /// real USB stick; a read-only file or a URL is presented write-protected.
 pub fn mount(host: &str, session_key: &str, path: &str) -> std::io::Result<Mount> {
+    mount_inner(host, session_key, path, false)
+}
+
+/// The iLO 5 (v5) vmport handshake: the same 54-byte hello shape the console
+/// channels use — [17] carries the drive type — and a status-at-16 reply.
+pub fn mount_v5(host: &str, session_key: &str, path: &str) -> std::io::Result<Mount> {
+    mount_inner(host, session_key, path, true)
+}
+
+fn mount_inner(host: &str, session_key: &str, path: &str, v5: bool) -> std::io::Result<Mount> {
     let drive = Drive::for_path(path);
     let (file, writable) = match drive {
         Drive::Floppy => Source::open_rw(path)?,
@@ -135,19 +145,34 @@ pub fn mount(host: &str, session_key: &str, path: &str) -> std::io::Result<Mount
     }
 
     let mut sock = ws::connect(host, 443, "/wss/vmport", Some(session_key))?;
-    let mut hello = [0u8; 34];
-    hello[0] = HELLO_CONNECT;
-    hello[1] = drive.hello();
-    hello[2..34].copy_from_slice(session_key.as_bytes());
-    sock.send_binary(&hello)?;
+    if v5 {
+        // v5: 16-byte header, connect@16, devType@17, key@22..54
+        let mut hello = [0u8; 54];
+        hello[16] = 0;
+        hello[17] = drive.hello();
+        hello[22..54].copy_from_slice(session_key.as_bytes());
+        sock.send_binary(&hello)?;
+    } else {
+        let mut hello = [0u8; 34];
+        hello[0] = HELLO_CONNECT;
+        hello[1] = drive.hello();
+        hello[2..34].copy_from_slice(session_key.as_bytes());
+        sock.send_binary(&hello)?;
+    }
 
-    // The BMC answers with a 4-byte attach status before any SCSI traffic.
+    // The BMC answers with an attach status before any SCSI traffic — 4 bytes
+    // on iLO 4, a v5-framed message (status at 16) on iLO 5.
     let reply = sock.recv(Duration::from_secs(15))?;
     if std::env::var("BMCKVM_DEBUG").is_ok() {
         eprintln!("[vmport] reply {reply:?}");
     }
-    if reply.len() != 4 || reply[0] != 32 || reply[1] != 0 {
-        return Err(ioerr(attach_error(reply.first().copied().unwrap_or(0))));
+    let ok = if v5 {
+        reply.get(16).copied() == Some(0)
+    } else {
+        reply.len() == 4 && reply[0] == 32 && reply[1] == 0
+    };
+    if !ok {
+        return Err(ioerr(attach_error(if v5 { reply.get(16).copied().unwrap_or(0) } else { reply.first().copied().unwrap_or(0) })));
     }
 
     sock.set_poll_timeout(Duration::from_millis(200)).ok();

@@ -55,6 +55,7 @@ pub fn attach(s: &Console, spec: String, jobs: &Jobs, sink: Sink) -> Option<Rece
                 Family::Quanta => quanta::vmedia::mount(&host, quanta::vmedia::CD_PORT, &token, 0, &spec)
                     .inspect(|_| { let _ = console.send(quanta::kvm::media_state_packet(true)); }),
                 Family::Ilo4 => ilo4::vmedia::mount(&host, &token, &spec),
+                Family::Ilo5 => ilo4::vmedia::mount_v5(&host, &token, &spec),
                 // iDRAC direct mode: the console session is already up, so its
                 // rotated ticket lets us open the media channel outbound.
                 Family::Idrac9 => match &idrac_parts {

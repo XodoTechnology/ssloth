@@ -54,7 +54,7 @@ pub enum Auth<'a> {
 }
 
 /// One HTTPS request/response. Returns (status, body).
-fn https(
+pub(crate) fn https(
     host: &str,
     method: &str,
     path: &str,
@@ -301,7 +301,7 @@ pub fn eject_media(host: &str, user: &str, pass: &str) -> std::io::Result<()> {
 
 // ---------- small helpers ----------
 
-fn between<'a>(s: &'a str, a: &str, b: &str) -> Option<&'a str> {
+pub(crate) fn between<'a>(s: &'a str, a: &str, b: &str) -> Option<&'a str> {
     let i = s.find(a)? + a.len();
     let j = s[i..].find(b)? + i;
     Some(&s[i..j])
