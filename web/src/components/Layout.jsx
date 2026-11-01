@@ -20,7 +20,6 @@ import TransfersTray from './TransfersTray';
 
 const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
-  { to: '/bmc', label: 'BMC', icon: Activity },
   { to: '/vault', label: 'Vault', icon: KeyRound },
   { to: '/snippets', label: 'Snippets', icon: Zap },
   { to: '/playbooks', label: 'Playbooks', icon: ListChecks },
@@ -32,6 +31,7 @@ const NAV = [
 
 export default function Layout() {
   const user = useStore((s) => s.user);
+  const hosts = useStore((s) => s.hosts);
   const setUser = useStore((s) => s.setUser);
   const version = useStore((s) => s.version);
   const commit = useStore((s) => s.commit);
@@ -81,7 +81,12 @@ export default function Layout() {
           <span className="font-bold text-zinc-100 tracking-tight">ssloth</span>
         </div>
         <nav className="flex-1 p-2 space-y-0.5">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {(((hosts?.some((h) => h.protocol === 'bmc') &&
+              localStorage.getItem('ssloth.bmcNav') !== '0') ||
+            localStorage.getItem('ssloth.bmcNav') === '1')
+            ? [...NAV.slice(0, 1), { to: '/bmc', label: 'BMC', icon: Activity }, ...NAV.slice(1)]
+            : NAV
+          ).map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}

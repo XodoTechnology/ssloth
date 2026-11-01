@@ -553,6 +553,18 @@ export default function Settings() {
               <option value="5">5 minutes</option>
               <option value="15">15 minutes</option>
               <option value="30">30 minutes</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">BMC dashboard nav</label>
+            <select
+              className="input"
+              defaultValue={localStorage.getItem('ssloth.bmcNav') || 'auto'}
+              onChange={(e) => localStorage.setItem('ssloth.bmcNav', e.target.value)}
+            >
+              <option value="auto">Auto (only when BMC hosts exist)</option>
+              <option value="1">Always show</option>
+              <option value="0">Never show</option>
               <option value="60">1 hour</option>
             </select>
             <span className="text-[11px] text-zinc-500">
