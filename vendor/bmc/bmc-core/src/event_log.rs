@@ -685,6 +685,9 @@ pub enum Plan {
     Ipmi,
     RedfishThenIpmi,
     IpmiThenRedfish,
+    /// Cisco IMC: nuova XML API. Its IPMI is off by default and its Redfish
+    /// is too old for the Thermal tree, so sensors come from managed objects.
+    Nuova,
 }
 
 /// What a source setting (0 Auto, 1 Redfish, 2 IPMI) means for a family.
@@ -697,6 +700,7 @@ pub fn plan(source: usize, family: Option<Family>) -> Plan {
         1 => Plan::Redfish,
         2 => Plan::Ipmi,
         _ if family == Some(Family::Ilo4) => Plan::IpmiThenRedfish,
+        _ if family == Some(Family::Cimc) => Plan::Nuova,
         _ => Plan::RedfishThenIpmi,
     }
 }
@@ -705,6 +709,7 @@ pub fn plan(source: usize, family: Option<Family>) -> Plan {
 pub fn auto_label(family: Option<Family>) -> &'static str {
     match plan(0, family) {
         Plan::IpmiThenRedfish => "Auto · IPMI first",
+        Plan::Nuova => "Auto · CIMC nuova",
         _ => "Auto · Redfish first",
     }
 }
@@ -760,6 +765,9 @@ pub fn read_log(
     match plan(source, family) {
         Plan::Ipmi => ipmi(host, user, password),
         Plan::Redfish => redfish(host, user, password, insecure),
+        // CIMC keeps its event log in Redfish; IPMI is off and there is no
+        // nuova-side fault read wired yet.
+        Plan::Nuova => redfish(host, user, password, insecure),
         Plan::RedfishThenIpmi => prefer_redfish(
             redfish(host, user, password, insecure).and_then(usable_log),
             || ipmi(host, user, password),
@@ -789,6 +797,8 @@ pub fn read_sensors(
             ipmi_sensors(host, user, password).and_then(usable_sensors),
             || redfish_sensors(host, user, password, insecure),
         ),
+        Plan::Nuova => crate::families::cimc::sensors(host, user, password)
+            .map_err(|e| e.to_string()),
     }
 }
 #[cfg(test)]

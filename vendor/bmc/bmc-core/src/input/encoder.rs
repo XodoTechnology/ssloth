@@ -77,7 +77,7 @@ impl FamilyEncoder {
     }
 
     fn key(&mut self, usage: u16, down: bool, repeat: bool, out: &mut Vec<Vec<u8>>) {
-        let avsp = matches!(self.family, Family::Avocent | Family::Idrac8);
+        let avsp = matches!(self.family, Family::Avocent | Family::Idrac8 | Family::Cimc);
         // Only AVSP forwards auto-repeat: iDRAC 8 never leaves a key held on
         // the host, so the host has nothing to repeat — held, Backspace deleted
         // one character and stopped. Everywhere else a held key repeats on the
@@ -123,7 +123,7 @@ impl FamilyEncoder {
             Family::Ilo4 | Family::Ilo5 => out.push(ilo4::kvm::key_report(self.mods, &self.held_u8())),
             // AVSP sends one packet per key transition and carries no modifier
             // byte: the modifiers are ordinary usages, down and up like any other.
-            Family::Avocent | Family::Idrac8 => out.push(avocent::kvm::key_packet(usage as u8, down)),
+            Family::Avocent | Family::Idrac8 | Family::Cimc => out.push(avocent::kvm::key_packet(usage as u8, down)),
             // AMI IVTP: the modifier byte rides in every key report, and a
             // modifier change on its own is a mods-only report.
             Family::Quanta | Family::Spx => {
@@ -180,7 +180,7 @@ impl FamilyEncoder {
             }
             // Avocent absolute mouse: framebuffer pixels, buttons L=1 R=2
             // M=4, the wheel a signed count (positive is up).
-            Family::Avocent | Family::Idrac8 => {
+            Family::Avocent | Family::Idrac8 | Family::Cimc => {
                 use avocent::kvm as ak;
                 let b = (left as u8 * ak::BTN_LEFT) | (right as u8 * ak::BTN_RIGHT) | (mid as u8 * ak::BTN_MIDDLE);
                 out.push(ak::mouse_packet(x, y, b, 0));
@@ -227,7 +227,7 @@ impl FamilyEncoder {
             Family::Ilo4 | Family::Ilo5 => out.push(ilo4::kvm::key_report(0, &[])),
             Family::Aten => out.extend(ups.iter().map(|&u| super::hid_event(u32::from(u), false).to_vec())),
             Family::Idrac9 => out.extend(ups.iter().filter_map(|&u| hid_to_keysym(u)).map(|ks| vnc::key_event(ks, false))),
-            Family::Avocent | Family::Idrac8 => out.extend(ups.iter().map(|&u| avocent::kvm::key_packet(u as u8, false))),
+            Family::Avocent | Family::Idrac8 | Family::Cimc => out.extend(ups.iter().map(|&u| avocent::kvm::key_packet(u as u8, false))),
             Family::Quanta | Family::Spx => {
                 for &u in &ups {
                     let seq = self.next_seq();
@@ -258,7 +258,7 @@ impl FamilyEncoder {
                 out.push(ilo4::kvm::key_report(0, &[]));
             }
             // One packet per transition; Shift is a key like any other (0xE1).
-            Family::Avocent | Family::Idrac8 => {
+            Family::Avocent | Family::Idrac8 | Family::Cimc => {
                 if shift { out.push(avocent::kvm::key_packet(225, true)); }
                 out.push(avocent::kvm::key_packet(hid, true));
                 out.push(avocent::kvm::key_packet(hid, false));
@@ -309,7 +309,7 @@ impl FamilyEncoder {
             // AVSP has no modifier byte: Ctrl, Alt and Delete are three
             // ordinary HID usage codes, pressed and released in order. This
             // is the reference client's own macro, 224/226/76.
-            Family::Avocent | Family::Idrac8 => {
+            Family::Avocent | Family::Idrac8 | Family::Cimc => {
                 for (hid, down) in [(224u8, true), (226, true), (76, true), (76, false), (226, false), (224, false)] {
                     out.push(avocent::kvm::key_packet(hid, down));
                 }

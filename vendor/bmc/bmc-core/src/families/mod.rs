@@ -5,6 +5,7 @@
 
 pub mod aten;
 pub mod avocent;
+pub mod cimc;
 pub mod idrac;
 pub mod idrac8;
 pub mod ilo4;
@@ -23,6 +24,7 @@ pub enum Family {
     /// HP iLO 4: Integrated Remote Console over WebSocket, URL-based vmedia.
     Ilo4,
     Ilo5,
+    Cimc,
     /// Dell iDRAC 9: standard RFB over WebSocket, Redfish for everything else.
     Idrac9,
     /// Dell iDRAC 7/8: Avocent APCP/AVSP on :5900 with DVC video, AVMP vmedia.
@@ -34,11 +36,12 @@ pub enum Family {
 }
 
 impl Family {
-    pub const ALL: [Family; 8] = [
+    pub const ALL: [Family; 9] = [
         Family::Aten,
         Family::Quanta,
         Family::Ilo4,
         Family::Ilo5,
+        Family::Cimc,
         Family::Idrac9,
         Family::Idrac8,
         Family::Spx,
@@ -51,6 +54,7 @@ impl Family {
             Family::Quanta => "Quanta / AMI MegaRAC",
             Family::Ilo4 => "HP iLO 4",
             Family::Ilo5 => "HP iLO 5",
+            Family::Cimc => "Cisco IMC",
             Family::Idrac9 => "Dell iDRAC 9",
             Family::Idrac8 => "Dell iDRAC 8",
             Family::Spx => "ASRock Rack / AMI SP-X",
@@ -66,6 +70,7 @@ impl Family {
             Family::Quanta => [0xC2, 0x8B, 0x5E],
             Family::Ilo4 => [0x5A, 0xA9, 0xC4],
             Family::Ilo5 => [0x5A, 0xA9, 0xC4],
+            Family::Cimc => [0x00, 0x9A, 0xD1],
             Family::Idrac9 => [0x8C, 0x8C, 0xD4],
             Family::Idrac8 => [0x7A, 0x9A, 0xC8],
             Family::Spx => [0xC9, 0x6A, 0x6A],
@@ -81,6 +86,7 @@ impl Family {
             Family::Quanta => "quanta",
             Family::Ilo4 => "ilo4",
             Family::Ilo5 => "ilo5",
+            Family::Cimc => "cimc",
             Family::Idrac9 => "idrac9",
             Family::Idrac8 => "idrac8",
             Family::Spx => "spx",
@@ -112,13 +118,14 @@ pub enum Vendor {
     Tyan,
     Quanta,
     Inspur,
+    Cisco,
 }
 
 impl Vendor {
-    pub const ALL: [Vendor; 12] = [
+    pub const ALL: [Vendor; 13] = [
         Vendor::Supermicro, Vendor::Ami, Vendor::Hp, Vendor::Dell, Vendor::Asrock,
         Vendor::Gigabyte, Vendor::Asus, Vendor::Lenovo, Vendor::Intel, Vendor::Tyan,
-        Vendor::Quanta, Vendor::Inspur,
+        Vendor::Quanta, Vendor::Inspur, Vendor::Cisco,
     ];
 
     /// Stable name for the inventory file.
@@ -136,6 +143,7 @@ impl Vendor {
             Vendor::Tyan => "tyan",
             Vendor::Quanta => "quanta",
             Vendor::Inspur => "inspur",
+            Vendor::Cisco => "cisco",
         }
     }
 
@@ -158,6 +166,7 @@ impl Vendor {
             Vendor::Tyan => "Tyan",
             Vendor::Quanta => "Quanta",
             Vendor::Inspur => "Inspur",
+            Vendor::Cisco => "Cisco",
         }
     }
 
@@ -213,7 +222,7 @@ impl Vendor {
             Vendor::Asus => include_bytes!("../../../../assets/icons/asus.png"),
             Vendor::Lenovo => include_bytes!("../../../../assets/icons/lenovo.png"),
             Vendor::Intel => include_bytes!("../../../../assets/icons/intel.png"),
-            Vendor::Ami | Vendor::Tyan | Vendor::Quanta | Vendor::Inspur => {
+            Vendor::Ami | Vendor::Tyan | Vendor::Quanta | Vendor::Inspur | Vendor::Cisco => {
                 include_bytes!("../../../../assets/icons/ami.png")
             }
         }
@@ -228,6 +237,7 @@ impl Vendor {
             Vendor::Dell => Family::Idrac9.tint(),
             Vendor::Asrock => Family::Spx.tint(),
             Vendor::Gigabyte => Family::Avocent.tint(),
+            Vendor::Cisco => Family::Cimc.tint(),
             Vendor::Asus => [0x7A, 0x9C, 0xD8],
             Vendor::Lenovo => [0xD8, 0x6A, 0x7A],
             Vendor::Intel => [0x5A, 0x9C, 0xD8],
@@ -249,6 +259,7 @@ impl Family {
             Family::Idrac9 | Family::Idrac8 => Vendor::Dell,
             Family::Spx => Vendor::Ami,
             Family::Avocent => Vendor::Gigabyte,
+            Family::Cimc => Vendor::Cisco,
         }
     }
 
@@ -297,6 +308,11 @@ pub fn detect(host: &str) -> Family {
 }
 
 fn detect_after_avocent(host: &str) -> Family {
+    // Cisco IMC answers /nuova with <aaaLogin> XML unauthenticated — checked
+    // first because the endpoint is distinctive and the probe is one request.
+    if cimc::detect(host).is_some() {
+        return Family::Cimc;
+    }
     if idrac::detect(host).is_some() {
         return Family::Idrac9;
     }

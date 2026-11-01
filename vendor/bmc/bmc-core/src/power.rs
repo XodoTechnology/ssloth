@@ -22,6 +22,7 @@ pub fn send_power(family: Family, h: &str, u: &str, p: &str, code: u8) -> String
         Family::Spx => crate::families::spx::power(
             h, u, p, if cmd == "soft" { "softoff" } else { cmd }),
         Family::Aten => aten_power(h, u, p, code),
+        Family::Cimc => crate::families::cimc::power(h, u, p, cmd),
         Family::Avocent => crate::families::avocent::power(
             h, u, p, if cmd == "soft" { "soft" } else { cmd }),
     };
@@ -83,6 +84,10 @@ pub fn reset_bmc(addr: &str, u: &str, p: &str) -> String {
         Family::Idrac8 => match crate::families::idrac8::reset_bmc(addr, u, p) {
             Ok(_) => format!("iDRAC reset sent to {addr} (back in ~2 min)"),
             Err(e) => format!("iDRAC reset failed: {e}"),
+        },
+        Family::Cimc => match crate::families::cimc::reset_bmc(addr, u, p) {
+            Ok(m) => format!("CIMC reset: {m}"),
+            Err(e) => format!("CIMC reset failed: {e}"),
         },
         Family::Avocent => match crate::families::avocent::reset_bmc(addr, u, p) {
             Ok(m) => format!("BMC reset requested: {m}"),

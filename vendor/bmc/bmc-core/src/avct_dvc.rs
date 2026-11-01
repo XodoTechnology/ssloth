@@ -34,10 +34,12 @@ pub const DVC7: u16 = 0x0082;
 pub const DVC7_GREY: u16 = 0x0083;
 pub const DVC23: u16 = 0x008A;
 pub const DVC23X: u16 = 0x008F;
+/// Cisco IMC's RLE video id — the same DVC wire format as DVC15.
+pub const DVC_RLE: u16 = 0x008B;
 
 /// True for the message ids this decoder takes.
 pub fn handles(id: u16) -> bool {
-    matches!(id, DVC15 | DVC7 | DVC7_GREY | DVC23 | DVC23X)
+    matches!(id, DVC15 | DVC7 | DVC7_GREY | DVC23 | DVC23X | DVC_RLE)
 }
 
 // Fragment flags (the reference's AVSP_RLE_GRAPHICS_FLAGS_*).

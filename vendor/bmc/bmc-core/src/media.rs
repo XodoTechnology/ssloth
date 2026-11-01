@@ -86,6 +86,12 @@ pub fn attach(s: &Console, spec: String, jobs: &Jobs, sink: Sink) -> Option<Rece
                         .and_then(|launch| avocent::vmedia::mount(&host, &launch, &spec)),
                     None => Err(err("no iDRAC web session")),
                 },
+                // CIMC: synthetic launch — account creds ride the channel.
+                Family::Cimc => match &avocent_sess {
+                    Some(sess) => crate::families::cimc::vm_launch(&host, sess)
+                        .and_then(|launch| avocent::vmedia::mount(&host, &launch, &spec)),
+                    None => Err(err("no CIMC session")),
+                },
                 Family::Aten => vmedia::mount(&host, 623, &user, &pass, &spec, &|_| {}),
             }
             .map(|m| (m, note)),

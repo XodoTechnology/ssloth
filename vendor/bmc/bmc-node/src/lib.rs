@@ -436,7 +436,8 @@ impl Task for SelTask {
     type Output = String;
     type JsValue = String;
     fn compute(&mut self) -> Result<Self::Output> {
-        let log = event_log::ipmi(&self.host, &self.user, &self.pass)
+        let log = event_log::read_log(0, Some(families::detect(&self.host)),
+            &self.host, &self.user, &self.pass, true)
             .map_err(Error::from_reason)?;
         let entries: Vec<_> = log
             .entries
@@ -476,7 +477,8 @@ impl Task for SensorsTask {
     type Output = String;
     type JsValue = String;
     fn compute(&mut self) -> Result<Self::Output> {
-        let s = event_log::ipmi_sensors(&self.host, &self.user, &self.pass)
+        let s = event_log::read_sensors(0, Some(families::detect(&self.host)),
+            &self.host, &self.user, &self.pass, true)
             .map_err(Error::from_reason)?;
         let entries: Vec<_> = s
             .entries

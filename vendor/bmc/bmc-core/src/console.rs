@@ -473,11 +473,13 @@ fn avocent_connect(host: &str, user: &str, pass: &str, progress: &Arc<Mutex<Stri
     // iDRAC 8 is the same console behind Dell's web login.
     type Login = fn(&str, &str, &str) -> std::io::Result<Session>;
     type Mint = fn(&str, &Session) -> std::io::Result<Launch>;
+    use crate::families::cimc;
     let (name, login, kvm_launch, logout): (&str, Login, Mint, fn(&str, &Session)) =
-        if family == Family::Idrac8 {
-            ("iDRAC 8", idrac8::login, idrac8::kvm_launch, idrac8::logout)
-        } else {
-            ("Avocent", avocent::login, avocent::kvm_launch, avocent::logout)
+        match family {
+            Family::Idrac8 => ("iDRAC 8", idrac8::login, idrac8::kvm_launch, idrac8::logout),
+            // CIMC logs in on /nuova but the console takes account creds in-band.
+            Family::Cimc => ("Cisco IMC", cimc::login, cimc::kvm_launch, cimc::logout),
+            _ => ("Avocent", avocent::login, avocent::kvm_launch, avocent::logout),
         };
 
     say(&format!("{name}: logging in…"));
@@ -578,6 +580,7 @@ fn avocent_connect(host: &str, user: &str, pass: &str, progress: &Arc<Mutex<Stri
     Ok(ConnectOk {
         decoder, link: FamilyLink::new(tx, alive),
         title: match (family, vendor) {
+            (Family::Cimc, _) => format!("Cisco IMC · {host}"),
             (Family::Idrac8, _) => format!("Dell · iDRAC 8 · {host}"),
             (_, families::Vendor::Dell) => format!("Dell PowerEdge C · Avocent MergePoint · {host}"),
             _ => format!("Gigabyte · Avocent MergePoint · {host}"),
@@ -1235,7 +1238,7 @@ fn connect_family(a: &Attempt, td: &mut Teardown) -> Result<ConnectOk, String> {
                                                 a.known.unwrap_or(vendor)),
         Family::Spx => return spx_connect(host, user, pass, progress,
                                           a.known.unwrap_or(vendor), td),
-        Family::Avocent | Family::Idrac8 =>
+        Family::Avocent | Family::Idrac8 | Family::Cimc =>
             return avocent_connect(host, user, pass, progress, family, vendor, td),
         Family::Aten => {}
     }
