@@ -143,6 +143,19 @@ router.post('/:sid/write', json, async (req, res) => {
 });
 
 // Stream a file download.
+router.get('/:sid/stat', async (req, res) => {
+  const ctx = await requireSftp(req, res);
+  if (!ctx) return;
+  const p = cleanPathParam(req.query.path);
+  if (p === null) return res.status(400).json({ error: 'bad path' });
+  try {
+    const st = await pStat(ctx.sftp, p);
+    res.json({ ok: true, size: st.size, mode: st.mode, mtime: st.mtime });
+  } catch (e) {
+    res.status(404).json({ error: 'not found' });
+  }
+});
+
 router.get('/:sid/download', async (req, res) => {
   const ctx = await requireSftp(req, res);
   if (!ctx) return;
@@ -183,7 +196,7 @@ router.post('/:sid/upload', async (req, res) => {
   const safeName = path.posix.basename(name);
   const full = path.posix.join(dir, safeName);
   try {
-    const ws = ctx.sftp.createWriteStream(full);
+    const ws = ctx.sftp.createWriteStream(full, req.query.append === '1' ? { flags: 'a' } : {});
     await new Promise((resolve, reject) => {
       let received = 0;
       ws.on('error', reject);
