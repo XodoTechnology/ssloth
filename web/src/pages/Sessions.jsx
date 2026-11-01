@@ -819,6 +819,16 @@ export default function Sessions() {
             >
               Reconnect
             </button>
+            <button
+              className="w-full px-3 py-1.5 text-left text-rose-400 hover:bg-ink-800"
+              onClick={() => {
+                // kills the session server-side (closeSession) and removes the tab
+                closeTab(tabMenu.tab.id);
+                setTabMenu(null);
+              }}
+            >
+              Disconnect
+            </button>
           </div>
         </div>
       )}

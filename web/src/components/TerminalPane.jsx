@@ -280,6 +280,9 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
             sessionRef.current = null;
             setPaneState({ status: 'error', sessionId: null });
           } else if (msg.state === 'closed') {
+            // clean end (logout/exit) — the following ws close is intentional,
+            // not a drop to auto-reconnect over
+            intentionalRef.current = true;
             setPaneState({ status: 'closed' });
           } else if (msg.state === 'gone') {
             // reattach missed — session died server-side; fall back to a
