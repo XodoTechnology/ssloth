@@ -237,13 +237,13 @@ export default function HostForm({ host, onClose, onSaved }) {
           </div>
         </div>
 
-        {form.protocol === 'ssh' && (
+        {(form.protocol === 'ssh' || form.protocol === 'bmc') && (
         <div>
           <label className="label">Bastion / jump host (optional)</label>
           <select className="input" value={form.jump_host_id} onChange={set('jump_host_id')}>
             <option value="">— direct connection —</option>
             {hosts
-              .filter((h) => h.id !== host?.id)
+              .filter((h) => h.protocol === 'ssh' && h.id !== host?.id)
               .map((h) => (
                 <option key={h.id} value={h.id}>
                   via {h.name}
