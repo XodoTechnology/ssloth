@@ -97,13 +97,7 @@ fn https(
     body: Option<(&str, &str)>,
 ) -> std::io::Result<(u16, String, String)> {
     let mut s = tls(host)?;
-    // A browser-like header set: some SP-X firmware 500s on requests with
-    // no User-Agent/Accept, and newer revs CSRF-check Origin/Referer.
-    let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\
-         User-Agent: Mozilla/5.0 (ssloth-bmc)\r\nAccept: application/json, */*\r\n\
-         Origin: https://{host}\r\nReferer: https://{host}/\r\n"
-    );
+    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
     if let Some(sess) = sess {
         req.push_str(&format!("Cookie: {}\r\n", sess.cookie));
         req.push_str(&format!("X-CSRFTOKEN: {}\r\n", sess.csrf));
@@ -171,13 +165,22 @@ pub fn detect(host: &str) -> Option<Info> {
     // Newer firmware types the OEM block `#AMIServiceRoot`; older (Redfish
     // 1.0.2, an ASRock Rack board) carries a bare `"Oem": {"Ami": {...}}`.
     let ami = body.contains("AMIServiceRoot") || body.contains("\"Ami\"");
-    if status != 200 || !ami {
-        return None;
+    if status == 200 && ami {
+        return Some(Info {
+            product: jstr(&body, "Product").unwrap_or_else(|| "AMI".into()),
+            rtp_version: jstr(&body, "RtpVersion").unwrap_or_default(),
+        });
     }
-    Some(Info {
-        product: jstr(&body, "Product").unwrap_or_else(|| "AMI".into()),
-        rtp_version: jstr(&body, "RtpVersion").unwrap_or_default(),
-    })
+    // OEM-stripped builds (e.g. Datto's ASRock Rack firmware) carry no AMI
+    // marker in Redfish at all. The session endpoint still answers JSON to a
+    // form POST, where a generic web server returns HTML or a 404.
+    let (_, _, b) = https(host, "POST", "/api/session", None,
+        Some(("application/x-www-form-urlencoded", "username=&password="))).ok()?;
+    if b.trim_start().starts_with('{')
+        && (b.contains("\"ok\"") || b.contains("\"code\"") || b.contains("\"error\"")) {
+        return Some(Info { product: "AMI".into(), rtp_version: String::new() });
+    }
+    None
 }
 
 pub fn login(host: &str, user: &str, pass: &str) -> std::io::Result<Session> {
