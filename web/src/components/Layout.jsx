@@ -14,6 +14,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { api } from '../api';
+import { sensorTier } from '../lib/sensor-tier';
 import { useStore } from '../store';
 import CommandPalette from './CommandPalette';
 import TransfersTray from './TransfersTray';
@@ -35,13 +36,14 @@ export default function Layout() {
   const bmcAlerts = useStore((s) => s.bmcAlerts);
   const setBmcAlerts = useStore((s) => s.setBmcAlerts);
   useEffect(() => {
-    const BAD = /^(ok|on|completed|operable)$/i;
     const poll = () =>
       api('/api/bmc/overview')
         .then((d) =>
           setBmcAlerts(
             (d.hosts || []).filter(
-              (h) => !h.sensor_exclude && h.latest?.entries?.some((e) => !BAD.test(e.status || ''))
+              (h) =>
+                !h.sensor_exclude &&
+                h.latest?.entries?.some((e) => sensorTier(e.status) === 'bad')
             ).length
           )
         )

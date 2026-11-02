@@ -3,6 +3,7 @@ import { api } from '../api';
 import { useStore } from '../store';
 import { Activity, EyeOff, Eye } from 'lucide-react';
 import Modal from '../components/Modal';
+import { sensorTier } from '../lib/sensor-tier';
 
 const KEY_CHIP = {
   ok: 'text-emerald-400',
@@ -60,7 +61,7 @@ export default function BmcDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {data.hosts.map((h) => {
           const power = h.latest?.entries?.find((e) => /^Power/i.test(e.name));
-          const bad = h.latest?.entries?.filter((e) => !/^(ok|on|completed|operable)$/i.test(e.status || ''));
+          const bad = h.latest?.entries?.filter((e) => sensorTier(e.status) === 'bad');
           return (
             <div
               key={h.id}
@@ -122,12 +123,13 @@ export default function BmcDashboard() {
   );
 }
 
-const NORMAL = /^(ok|on|completed|operable)$/i;
+
 
 function SensorDetail({ host, onClose }) {
   const entries = host.latest?.entries || [];
-  const bad = entries.filter((e) => !NORMAL.test(e.status || ''));
-  const good = entries.filter((e) => NORMAL.test(e.status || ''));
+  const bad = entries.filter((e) => sensorTier(e.status) === 'bad');
+  const warn = entries.filter((e) => sensorTier(e.status) === 'warn');
+  const good = entries.filter((e) => ['ok', 'info'].includes(sensorTier(e.status)));
   return (
     <Modal title={`${host.name || host.hostname} — sensors`} onClose={onClose} wide>
       <div className="text-[11px] text-zinc-500 mb-2">
@@ -137,16 +139,19 @@ function SensorDetail({ host, onClose }) {
       <div className="max-h-[60vh] overflow-auto rounded border border-ink-800">
         <table className="w-full text-[11px] font-mono">
           <tbody>
-            {[...bad, ...good].map((e, i) => (
-              <tr key={i} className="border-b border-ink-800/60">
-                {[e.name, e.reading, e.units, e.status, e.thresholds].map((c, j) => (
-                  <td key={j}
-                    className={`px-2 py-1 ${!NORMAL.test(e.status || '') ? 'text-rose-400' : 'text-zinc-300'}`}>
-                    {c}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {[...bad, ...warn, ...good].map((e, i) => {
+              const t = sensorTier(e.status);
+              return (
+                <tr key={i} className="border-b border-ink-800/60">
+                  {[e.name, e.reading, e.units, e.status, e.thresholds].map((c, j) => (
+                    <td key={j}
+                      className={`px-2 py-1 ${t === 'bad' ? 'text-rose-400' : t === 'warn' ? 'text-amber-300' : 'text-zinc-300'}`}>
+                      {c}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
