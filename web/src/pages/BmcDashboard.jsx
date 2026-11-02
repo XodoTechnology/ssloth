@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
 import { Activity, EyeOff, Eye } from 'lucide-react';
+import Modal from '../components/Modal';
 
 const KEY_CHIP = {
   ok: 'text-emerald-400',
@@ -14,6 +15,7 @@ export default function BmcDashboard() {
   const { toast } = useStore();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [detail, setDetail] = useState(null); // host object
 
   const load = () =>
     api('/api/bmc/overview').then(setData).catch((e) => setError(e.message));
@@ -60,7 +62,11 @@ export default function BmcDashboard() {
           const power = h.latest?.entries?.find((e) => /^Power/i.test(e.name));
           const bad = h.latest?.entries?.filter((e) => !/^(ok|on|completed|operable)$/i.test(e.status || ''));
           return (
-            <div key={h.id} className="rounded-lg border border-ink-700 bg-ink-900 p-4 space-y-2">
+            <div
+              key={h.id}
+              className="rounded-lg border border-ink-700 bg-ink-900 p-4 space-y-2 cursor-pointer hover:border-ink-500"
+              onClick={() => h.latest && setDetail(h)}
+            >
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-medium text-zinc-100">{h.name || h.hostname}</div>
@@ -69,7 +75,7 @@ export default function BmcDashboard() {
                 <button
                   className="text-zinc-500 hover:text-zinc-300"
                   title={h.sensor_exclude ? 'include in sensor sweep' : 'exclude from sensor sweep'}
-                  onClick={() => toggle(h)}
+                  onClick={(e) => { e.stopPropagation(); toggle(h); }}
                 >
                   {h.sensor_exclude ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -111,6 +117,39 @@ export default function BmcDashboard() {
           );
         })}
       </div>
+      {detail && <SensorDetail host={detail} onClose={() => setDetail(null)} />}
     </div>
+  );
+}
+
+const NORMAL = /^(ok|on|completed|operable)$/i;
+
+function SensorDetail({ host, onClose }) {
+  const entries = host.latest?.entries || [];
+  const bad = entries.filter((e) => !NORMAL.test(e.status || ''));
+  const good = entries.filter((e) => NORMAL.test(e.status || ''));
+  return (
+    <Modal title={`${host.name || host.hostname} — sensors`} onClose={onClose} wide>
+      <div className="text-[11px] text-zinc-500 mb-2">
+        {entries.length} sensors · {bad.length} outside normal ·
+        sampled {host.latest ? new Date(host.latest.t).toLocaleTimeString() : '—'}
+      </div>
+      <div className="max-h-[60vh] overflow-auto rounded border border-ink-800">
+        <table className="w-full text-[11px] font-mono">
+          <tbody>
+            {[...bad, ...good].map((e, i) => (
+              <tr key={i} className="border-b border-ink-800/60">
+                {[e.name, e.reading, e.units, e.status, e.thresholds].map((c, j) => (
+                  <td key={j}
+                    className={`px-2 py-1 ${!NORMAL.test(e.status || '') ? 'text-rose-400' : 'text-zinc-300'}`}>
+                    {c}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
   );
 }
