@@ -52,6 +52,9 @@ export default function BmcDashboard() {
         <h1 className="text-lg font-semibold text-zinc-100">BMC dashboard</h1>
         <span className="text-xs text-zinc-500">{data.hosts.length} host{data.hosts.length === 1 ? '' : 's'}</span>
       </div>
+      {data.bmc_available === false && (
+        <p className="text-sm text-rose-400">native bmc addon not loaded — sensor sweeps can't run</p>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {data.hosts.map((h) => {
           const power = h.latest?.entries?.find((e) => /^Power/i.test(e.name));
@@ -78,7 +81,14 @@ export default function BmcDashboard() {
                   </span>
                 )}
                 {h.sensor_exclude && <span className="text-zinc-500">monitoring off</span>}
-                {!h.latest && !h.sensor_exclude && <span className="text-zinc-600">no samples yet</span>}
+                {!h.latest && !h.sensor_exclude && !h.sweep_error && (
+                  <span className="text-zinc-600">no samples yet</span>
+                )}
+                {!h.latest && h.sweep_error && (
+                  <span className="text-rose-400" title={h.sweep_error}>
+                    sweep: {h.sweep_error}
+                  </span>
+                )}
                 {h.latest && (
                   <span className="text-zinc-500">
                     {new Date(h.latest.t).toLocaleTimeString()} · {h.latest.entries.length} sensors

@@ -10,6 +10,7 @@ const { resolveConnectSpec } = require('./ssh/manager');
 const SAMPLES_PER_HOST = 200; // ~16h at the 5-min sweep
 const SWEEP_EVERY_MS = 5 * 60 * 1000;
 const history = new Map(); // hostId -> [{t, entries, source}]
+const lastErr = new Map(); // hostId -> error string from the last failed sweep
 
 function record(hostId, sensors) {
   if (!sensors || !Array.isArray(sensors.entries) || !sensors.entries.length) return;
@@ -45,8 +46,9 @@ async function sweep() {
       const spec = specFor(h);
       const s = JSON.parse(await bmc.readSensors(spec));
       record(h.id, s);
-    } catch {
-      // unreachable hosts are routine; the next sweep retries quietly
+      lastErr.delete(h.id);
+    } catch (e) {
+      lastErr.set(h.id, String(e && e.message || e).slice(0, 140));
     }
   }
 }
@@ -59,4 +61,4 @@ function start() {
   timer.unref?.();
 }
 
-module.exports = { record, getHistory, latest, start };
+module.exports = { record, getHistory, latest, start, lastErr: (id) => lastErr.get(id) || null };
