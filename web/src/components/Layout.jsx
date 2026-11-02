@@ -32,6 +32,24 @@ const NAV = [
 export default function Layout() {
   const user = useStore((s) => s.user);
   const hosts = useStore((s) => s.hosts);
+  const bmcAlerts = useStore((s) => s.bmcAlerts);
+  const setBmcAlerts = useStore((s) => s.setBmcAlerts);
+  useEffect(() => {
+    const BAD = /^(ok|on|completed|operable)$/i;
+    const poll = () =>
+      api('/api/bmc/overview')
+        .then((d) =>
+          setBmcAlerts(
+            (d.hosts || []).filter(
+              (h) => !h.sensor_exclude && h.latest?.entries?.some((e) => !BAD.test(e.status || ''))
+            ).length
+          )
+        )
+        .catch(() => {});
+    poll();
+    const t = setInterval(poll, 60000);
+    return () => clearInterval(t);
+  }, []);
   const setUser = useStore((s) => s.setUser);
   const version = useStore((s) => s.version);
   const commit = useStore((s) => s.commit);
@@ -101,6 +119,9 @@ export default function Layout() {
             >
               <Icon size={16} />
               {label}
+              {to === '/bmc' && bmcAlerts > 0 && (
+                <span className="ml-auto h-2 w-2 rounded-full bg-rose-500" title={`${bmcAlerts} BMC host${bmcAlerts === 1 ? '' : 's'} reporting out-of-normal sensors`} />
+              )}
             </NavLink>
           ))}
         </nav>

@@ -95,6 +95,8 @@ export const useStore = create((set, get) => ({
     set({ hostStatus: status });
   },
 
+  bmcAlerts: 0,
+  setBmcAlerts: (n) => set({ bmcAlerts: n }),
   async refreshAll(api) {
     const [h, c, s, t, p] = await Promise.all([
       api('/api/hosts'),
