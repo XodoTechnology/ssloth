@@ -318,29 +318,28 @@ pub fn connect(host: &str, cookie: &str, launch: &crate::families::spx::Launch,
     }
 
     // 2) VALIDATE_VIDEO_SESSION: all fixed-width NUL-padded fields, 438 bytes
-    //    on the newer viewer and 373 on the older, which stops at the MAC. The
-    //    username and MAC are what the browser client sends when it cannot
-    //    know them, and the BMC does not check either.
+    //    on the newer viewer and 373 on the older, which stops at the MAC —
+    //    some builds answering h5viewercfg still take the 373-byte layout
+    //    (Gooxi's is one), so the launch's guess gets one retry at the other
+    //    size when the first packet is met with silence.
+    for attempt in 0..2 {
+    let legacy = if attempt == 0 { launch.legacy_packet } else { !launch.legacy_packet };
     let mut body = Vec::with_capacity(438);
     body.push(0u8);
     cstr(&mut body, &launch.token, SSI_HASH_SIZE);
     cstr(&mut body, &launch.client_ip, CLIENT_OWN_IP_LENGTH);
     cstr(&mut body, "domain/username", CLIENT_USERNAME_LENGTH);
     cstr(&mut body, "00-00-00-00-00-00", CLIENT_OWN_MAC_LENGTH);
-    if !launch.legacy_packet {
+    if !legacy {
         cstr(&mut body, &launch.server_ip, CLIENT_OWN_IP_LENGTH);
     }
 
     let mut pkt = Vec::with_capacity(8 + 8 + body.len() + 8);
-    // Both vendor viewers put a bare CONNECTION_COMPLETE_PKT header (size 0,
-    // status 1) in front when the BMC advertises KVM_SESSION_RECONNECT
-    // (`1 == window.reconnect_enabled`). The first port left it out.
     if launch.reconnect {
         pkt.extend_from_slice(&header(cmd::CONNECTION_COMPLETE_PKT, 0, 1));
     }
     pkt.extend_from_slice(&header(cmd::VALIDATE_VIDEO_SESSION, body.len() as u32, 1));
     pkt.extend_from_slice(&body);
-    // 3) RESUME_REDIRECTION, in the same message as the vendor client sends it.
     pkt.extend_from_slice(&header(cmd::RESUME_REDIRECTION, 0, 0));
     c.send(&pkt)?;
 
@@ -350,6 +349,7 @@ pub fn connect(host: &str, cookie: &str, launch: &crate::families::spx::Launch,
     let mut verdict = None;
     loop {
         if std::time::Instant::now() > deadline {
+            if attempt == 0 && verdict.is_none() { break; } // retry the other size
             // Withdraw, or the BMC keeps prompting the holder on our behalf.
             c.close();
             return Err(ioerr(match verdict {
@@ -397,6 +397,8 @@ pub fn connect(host: &str, cookie: &str, launch: &crate::families::spx::Launch,
             None => continue,
         }
     }
+    }
+    Err(ioerr("the console never answered the validate packet"))
 }
 
 // ---------- video ----------

@@ -55,6 +55,9 @@ pub struct Session {
 pub struct Launch {
     /// 16-character per-launch KVM token.
     pub token: String,
+    /// The 32-char session id newer firmware validates on (h5viewercfg and
+    /// /api/kvm/token both return it; empty on builds that don't).
+    pub session: String,
     /// Our address *as the BMC sees it*, which is what the validate packet must
     /// carry — not the local socket address, which may be behind NAT.
     pub client_ip: String,
@@ -224,6 +227,18 @@ pub fn logout(host: &str, sess: &Session) {
 /// validate packet one field shorter.
 pub fn kvm_launch(host: &str, sess: &Session) -> std::io::Result<Launch> {
     let reconnect = features(host, sess).iter().any(|f| f == "KVM_SESSION_RECONNECT");
+    let (tstatus, _, tbody) =
+        https(host, "GET", "/api/kvm/token", Some(sess), None)?;
+    if tstatus == 200 && jstr(&tbody, "token").is_some() {
+        return Ok(Launch {
+            token: jstr(&tbody, "token").unwrap_or_default(),
+            session: jstr(&tbody, "session").unwrap_or_default(),
+            client_ip: jstr(&tbody, "client_ip").unwrap_or_default(),
+            server_ip: String::new(),
+            legacy_packet: true,
+            reconnect,
+        });
+    }
     let (status, _, body) =
         https(host, "GET", "/api/settings/media/h5viewercfg", Some(sess), None)?;
     if status == 200 && jstr(&body, "token").is_some() {
@@ -234,6 +249,7 @@ pub fn kvm_launch(host: &str, sess: &Session) -> std::io::Result<Launch> {
         }
         return Ok(Launch {
             token: jstr(&body, "token").unwrap_or_default(),
+            session: jstr(&body, "session").unwrap_or_default(),
             client_ip: jstr(&body, "client_ip").unwrap_or_default(),
             server_ip: jstr(&body, "server_ip").unwrap_or_else(|| host.to_string()),
             legacy_packet: false,
@@ -247,6 +263,7 @@ pub fn kvm_launch(host: &str, sess: &Session) -> std::io::Result<Launch> {
     })?;
     Ok(Launch {
         token,
+        session: jstr(&body, "session").unwrap_or_default(),
         client_ip: jstr(&body, "client_ip").unwrap_or_default(),
         server_ip: String::new(),
         legacy_packet: true,
