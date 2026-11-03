@@ -68,7 +68,10 @@ pub fn attach(s: &Console, spec: String, jobs: &Jobs, sink: Sink) -> Option<Rece
                 // SP-X: the Java client's media tunnel through 443, on the
                 // console's own web session and KVM token.
                 Family::Spx => match &spx_sess {
-                    Some(sess) => crate::families::spx::vmedia::mount(&host, &sess.cookie, &token, &spec),
+                    Some(sess) => {
+                        let mtok = crate::families::spx::media_token(&host, sess).unwrap_or(token);
+                        crate::families::spx::vmedia::mount(&host, &sess.cookie, &mtok, &spec)
+                    }
                     None => Err(err("no SP-X web session")),
                 },
                 // Avocent AVMP: a third channel on the console port. The

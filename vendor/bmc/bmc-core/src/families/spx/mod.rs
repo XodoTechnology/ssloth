@@ -218,6 +218,15 @@ pub fn logout(host: &str, sess: &Session) {
     let _ = https(host, "DELETE", "/api/session", Some(sess), None);
 }
 
+/// The media-side token from h5viewercfg — on this build the video and
+/// media credentials come from different endpoints, unlike the console token.
+pub fn media_token(host: &str, sess: &Session) -> Option<String> {
+    let (status, _, body) =
+        https(host, "GET", "/api/settings/media/h5viewercfg", Some(sess), None).ok()?;
+    if status != 200 { return None }
+    jstr(&body, "token")
+}
+
 /// Fetch the console launch parameters. Mints a fresh KVM token each call.
 ///
 /// Two firmware generations answer differently. The newer viewer reads

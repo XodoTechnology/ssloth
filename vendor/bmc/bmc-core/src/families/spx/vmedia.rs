@@ -63,6 +63,7 @@ fn ack_reason(status: u8) -> &'static str {
         4 => "the virtual CD is already in use",
         5 => "this account lacks the virtual media privilege",
         8 => "the maximum number of media sessions is in use",
+        9 => "virtual media needs a license this BMC does not have",
         13 => "virtual media is disabled on this BMC",
         _ => "the BMC refused the redirection",
     }
