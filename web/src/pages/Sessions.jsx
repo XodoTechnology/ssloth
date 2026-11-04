@@ -199,6 +199,7 @@ export default function Sessions() {
 
   const bmcPower = async (h, action, path = 'power') => {
     setPowerMenu(null);
+    toast(`sending ${path === 'mc-reset' ? 'BMC reset' : `power ${action}`} → ${h.name}…`);
     try {
       const r = await api(`/api/hosts/${h.id}/${path}`, { method: 'POST', body: { action } });
       toast(r.message || `${action} sent to ${h.name}`, 'success');
@@ -317,7 +318,7 @@ export default function Sessions() {
   const renderHost = (h) => (
     <React.Fragment key={h.id}>
     <div
-      className="group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
+      className="group relative flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer hover:bg-ink-800"
       onClick={() => connectHost(h)}
       onDoubleClick={() => maybeDuplicate(h)}
       draggable
@@ -405,7 +406,7 @@ export default function Sessions() {
           </div>
         )}
       </div>
-      <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+      <div className="absolute right-1 top-1 bottom-1 hidden group-hover:flex items-center gap-0.5 shrink-0 rounded-md bg-ink-900/95 pl-2 pr-0.5 shadow-sm">
         {h.mac && !readOnly && (
           <button
             className="p-1 text-zinc-500 hover:text-amber-400"

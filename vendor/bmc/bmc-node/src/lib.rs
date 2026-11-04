@@ -318,6 +318,7 @@ fn family_from(s: &str) -> Option<families::Family> {
         "idrac8" => families::Family::Idrac8,
         "spx" => families::Family::Spx,
         "avocent" => families::Family::Avocent,
+        "cimc" => families::Family::Cimc,
         _ => return None,
     })
 }

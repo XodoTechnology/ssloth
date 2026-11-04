@@ -35,11 +35,14 @@ pub fn attach(s: &Console, spec: String, jobs: &Jobs, sink: Sink) -> Option<Rece
     // Mounting is the user's own action, as a connect is.
     std::thread::spawn(move || crate::net::deliberately(|| {
         let _guard = guard;
+        let stage = |m: &str| sink.emit(Event::Notice(format!("mount: {m}")));
         let err = |m: &str| std::io::Error::new(std::io::ErrorKind::Other, m.to_string());
+        stage(&format!("attaching {}", crate::media_source::file_name(&spec)));
         let mut note = "";
         let mut native = None;
         if crate::media_source::is_url(&spec) {
             if crate::families::native_url_media(family, &spec) {
+                stage("asking the BMC to fetch the image");
                 match crate::families::mount_url_native(family, &host, &user, &pass, &spec) {
                     Ok(m) => native = Some(m),
                     Err(_) => note = " (the BMC refused the URL, so it is proxied)",
@@ -69,7 +72,9 @@ pub fn attach(s: &Console, spec: String, jobs: &Jobs, sink: Sink) -> Option<Rece
                 // console's own web session and KVM token.
                 Family::Spx => match &spx_sess {
                     Some(sess) => {
+                        stage("fetching the media token");
                         let mtok = crate::families::spx::media_token(&host, sess).unwrap_or(token);
+                        stage("opening the media channel");
                         crate::families::spx::vmedia::mount(&host, &sess.cookie, &mtok, &spec)
                     }
                     None => Err(err("no SP-X web session")),

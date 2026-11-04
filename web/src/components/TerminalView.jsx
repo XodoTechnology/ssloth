@@ -14,6 +14,7 @@ import {
   Square,
   FileDown,
   Play,
+  Power,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -31,6 +32,7 @@ export default function TerminalView({ tab, active }) {
   const [showShare, setShowShare] = useState(false);
   const [showPlaybooks, setShowPlaybooks] = useState(false);
   const [splitPicker, setSplitPicker] = useState(false);
+  const [powerMenu, setPowerMenu] = useState(false);
 
   const snippets = useStore((s) => s.snippets);
   const playbooks = useStore((s) => s.playbooks);
@@ -51,7 +53,19 @@ export default function TerminalView({ tab, active }) {
   const recording = !!pstate.recording;
   const broadcasting = broadcastTabId === tab.id;
 
+  // The toolbar is contextual: a BMC console wants power/media controls, a
+  // telnet session can't do SFTP, and an ssh shell gets everything.
+  const activeTarget = panes.find((p) => p.id === activePaneId)?.target || tab.target;
+  const activeHost = hosts.find((h) => h.id === activeTarget?.hostId);
+  const isBmc = activeHost?.protocol === 'bmc';
+  const isTelnet = activeHost?.protocol === 'telnet';
+
   const sender = () => activeSender(tab.id);
+
+  const bmcPower = (action) => {
+    setPowerMenu(false);
+    sender()?.sendJson?.({ type: 'power', action });
+  };
 
   // Ctrl+F opens the scrollback search for this tab while it's visible.
   useEffect(() => {
@@ -154,6 +168,67 @@ export default function TerminalView({ tab, active }) {
         )}
         <div className="flex-1" />
 
+        {isBmc && (
+          <>
+            <div className="relative">
+              <button
+                className="btn-ghost !py-1 !px-2 text-xs"
+                onClick={() => setPowerMenu((v) => !v)}
+                disabled={status !== 'ready'}
+                title="Chassis / BMC power"
+              >
+                <Power size={14} /> <span className="hidden sm:inline">Power</span>
+              </button>
+              {powerMenu && (
+                <div className="absolute right-0 top-8 z-30 w-52 card shadow-xl py-1">
+                  <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-zinc-600">chassis power</div>
+                  {[
+                    ['on', 'Power on'],
+                    ['soft', 'Graceful shutdown'],
+                    ['off', 'Power off (force)'],
+                    ['cycle', 'Power cycle'],
+                    ['reset', 'Hard reset'],
+                  ].map(([a, label]) => (
+                    <button
+                      key={a}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-ink-800 text-zinc-200"
+                      onClick={() => bmcPower(a)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <div className="border-t border-ink-700 mt-1 pt-1">
+                    <button
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-ink-800 text-amber-300"
+                      onClick={() => bmcPower('mcreset')}
+                    >
+                      Reset BMC (host unaffected)
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              className="btn-ghost !py-1 !px-2 text-xs"
+              onClick={() => sender()?.openMount?.()}
+              disabled={status !== 'ready'}
+              title="Mount / eject virtual media"
+            >
+              <Disc3 size={14} /> <span className="hidden sm:inline">Media</span>
+            </button>
+            <button
+              className="btn-ghost !py-1 !px-2 text-xs"
+              onClick={() => sender()?.sendJson?.({ type: 'cad' })}
+              disabled={status !== 'ready'}
+              title="Ctrl+Alt+Del"
+            >
+              <span className="text-xs font-mono">CAD</span>
+            </button>
+          </>
+        )}
+
+        {!isBmc && (
+        <>
         <div className="relative">
           <button
             className="btn-ghost !py-1 !px-2 text-xs"
@@ -240,14 +315,16 @@ export default function TerminalView({ tab, active }) {
         >
           <Radio size={14} />
         </button>
-        <button
-          className={`btn-ghost !py-1 !px-2 text-xs ${showSftp ? 'text-emerald-400' : ''}`}
-          onClick={() => setShowSftp((v) => !v)}
-          disabled={status !== 'ready'}
-          title="Files (SFTP)"
-        >
-          <FolderOpen size={14} /> <span className="hidden sm:inline">Files</span>
-        </button>
+        {!isTelnet && (
+          <button
+            className={`btn-ghost !py-1 !px-2 text-xs ${showSftp ? 'text-emerald-400' : ''}`}
+            onClick={() => setShowSftp((v) => !v)}
+            disabled={status !== 'ready'}
+            title="Files (SFTP)"
+          >
+            <FolderOpen size={14} /> <span className="hidden sm:inline">Files</span>
+          </button>
+        )}
         <button
           className="btn-ghost !py-1 !px-2 text-xs"
           onClick={downloadLog}
@@ -257,19 +334,21 @@ export default function TerminalView({ tab, active }) {
         </button>
         <button
           className="btn-ghost !py-1 !px-2 text-xs"
-          onClick={() => setSplitPicker(true)}
-          disabled={panes.length >= 2}
-          title="Split pane"
-        >
-          <Columns2 size={14} />
-        </button>
-        <button
-          className="btn-ghost !py-1 !px-2 text-xs"
           onClick={() => setShowShare(true)}
           disabled={status !== 'ready'}
           title="Share session"
         >
           <Share2 size={14} />
+        </button>
+        </>
+        )}
+        <button
+          className="btn-ghost !py-1 !px-2 text-xs"
+          onClick={() => setSplitPicker(true)}
+          disabled={panes.length >= 2}
+          title="Split pane"
+        >
+          <Columns2 size={14} />
         </button>
         <button
           className="btn-ghost !py-1 !px-2 text-xs"

@@ -20,7 +20,10 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   const [pasteText, setPasteText] = useState('');
   const [mountOpen, setMountOpen] = useState(false);
   const [mountUrl, setMountUrl] = useState('');
+  const [op, setOp] = useState(null); // {name, stages:[{msg,done}], done, err}
+  const [stages, setStages] = useState([]); // connect-time stage lines
   const fileRef = useRef(null);
+  const opTimerRef = useRef(null);
   const toast = useStore((s) => s.toast);
   const setPaneStateRef = useRef(setPaneState);
   setPaneStateRef.current = setPaneState;
@@ -35,6 +38,14 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
     const prior = useStore.getState().paneStates[`${tab.id}:${pane.id}`];
     if (prior?.sessionId) sessionRef.current = prior.sessionId;
     open();
+    // The toolbar drives this pane through the registered sender — mount
+    // modal, power, reconnect all reach the live ws through sendJson.
+    useStore.getState().registerPane(tab.id, pane.id, {
+      sendJson: (obj) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(obj)),
+      reconnect: () => { intentionalRef.current = false; open(); },
+      openMount: () => setMountOpen(true),
+      closeSession: () => sendJson({ type: 'close' }),
+    });
     const onBlur = () => {
       heldRef.current.clear();
       if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: 'releaseAll' }));
@@ -44,6 +55,8 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
       mountedRef.current = false;
       window.removeEventListener('blur', onBlur);
       clearTimeout(retryRef.current.timer);
+      clearTimeout(opTimerRef.current);
+      useStore.getState().unregisterPane(tab.id, pane.id);
       try { wsRef.current?.close(); } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,13 +107,43 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
         case 'ready':
           sessionRef.current = msg.sessionId;
           retryRef.current.attempt = 0;
+          setStages([]);
           setPaneState({ status: 'ready', sessionId: msg.sessionId, statusMsg: msg.reattached ? 'session restored' : `${msg.title} (${msg.family})` });
+          break;
+        case 'op':
+          // A BMC operation's progress report — mount/power stage lines.
+          setOp((cur) => {
+            if (msg.phase === 'start' || !cur || cur.name !== msg.op || cur.done) {
+              return { name: msg.op, stages: [{ msg: msg.message, done: false }], done: false, err: false };
+            }
+            const stages = [...cur.stages];
+            if (msg.phase === 'stage') {
+              if (stages.length) stages[stages.length - 1] = { ...stages[stages.length - 1], done: true };
+              stages.push({ msg: msg.message, done: false });
+              return { ...cur, stages };
+            }
+            if (stages.length) stages[stages.length - 1] = { ...stages[stages.length - 1], done: true };
+            stages.push({ msg: msg.message, done: true });
+            return { ...cur, stages, done: msg.phase === 'done', err: msg.phase === 'error' };
+          });
+          if (msg.phase === 'done' || msg.phase === 'error') {
+            clearTimeout(opTimerRef.current);
+            opTimerRef.current = setTimeout(() => mountedRef.current && setOp(null), msg.phase === 'done' ? 5000 : 9000);
+          }
           break;
         case 'status':
           setPaneState({ statusMsg: msg.message || '' });
-          if (msg.state === 'error') { sessionRef.current = null; setPaneState({ status: 'error', sessionId: null }); }
-          else if (msg.state === 'closed') setPaneState({ status: 'closed' });
-          else if (msg.state === 'connecting') setPaneState({ status: 'connecting' });
+          if (msg.state === 'connecting') {
+            setPaneState({ status: 'connecting' });
+            if (msg.message) setStages((s) => (s[s.length - 1] === msg.message ? s : [...s.slice(-7), msg.message]));
+          } else if (msg.state === 'error') {
+            sessionRef.current = null;
+            setPaneState({ status: 'error', sessionId: null });
+            clearCanvas();
+          } else if (msg.state === 'closed') {
+            setPaneState({ status: 'closed' });
+            clearCanvas();
+          }
           break;
       }
     };
@@ -112,6 +155,16 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   }
 
   const sendJson = (o) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(o));
+
+  // Wipe the framebuffer — a closed/error console shouldn't keep showing the
+  // last frame it received behind the overlay.
+  const clearCanvas = () => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, c.height);
+  };
 
   const onKey = (e, down) => {
     if (stateRef.current.status !== 'ready') return;
@@ -163,6 +216,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
       <canvas
         ref={canvasRef}
         className="max-w-full max-h-full"
+        style={{ visibility: st.status === 'ready' ? 'visible' : 'hidden' }}
         onMouseMove={(e) => pointer(e, e.buttons)}
         onMouseDown={(e) => pointer(e, e.buttons | (1 << e.button === 1 ? 0 : e.button))}
         onMouseUp={(e) => pointer(e, e.buttons)}
@@ -170,12 +224,39 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
         onContextMenu={(e) => e.preventDefault()}
       />
       {st.status !== 'ready' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink-950/90 text-zinc-400">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink-950 text-zinc-400">
           <p className="text-sm">{st.status === 'error' ? 'connection failed' : st.status === 'closed' ? 'console closed' : 'connecting…'}</p>
-          {st.statusMsg && <p className="text-xs text-zinc-600 max-w-md text-center">{st.statusMsg}</p>}
+          {stages.length > 0 ? (
+            <div className="flex flex-col gap-0.5 text-left">
+              {stages.map((s, i) => (
+                <p key={i} className={`text-xs font-mono ${i === stages.length - 1 ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                  {i === stages.length - 1 && st.status === 'connecting' ? '▸ ' : '  '}{s}
+                </p>
+              ))}
+            </div>
+          ) : (
+            st.statusMsg && <p className="text-xs text-zinc-600 max-w-md text-center">{st.statusMsg}</p>
+          )}
           {(st.status === 'error' || st.status === 'closed') && (
             <button className="btn-primary mt-2" onClick={() => { intentionalRef.current = false; open(); }}>Reconnect</button>
           )}
+        </div>
+      )}
+      {op && (
+        <div className="absolute bottom-3 right-3 z-20 w-64 rounded-md border border-ink-700 bg-ink-900/95 shadow-lg p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-300">
+            {!op.done && !op.err && <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />}
+            {op.done && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
+            {op.err && <span className="h-2 w-2 rounded-full bg-red-500" />}
+            {op.name}
+          </div>
+          <div className="mt-1.5 flex flex-col gap-0.5">
+            {op.stages.map((s, i) => (
+              <p key={i} className={`text-[11px] font-mono leading-tight ${s.done ? 'text-zinc-500' : op.err && i === op.stages.length - 1 ? 'text-red-400' : 'text-zinc-300'}`}>
+                <span className="mr-1">{s.done ? '✓' : '▸'}</span>{s.msg}
+              </p>
+            ))}
+          </div>
         </div>
       )}
       {focused && st.status === 'ready' && (

@@ -31,6 +31,12 @@ function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
+// An in-flight BMC operation's stage, for the client's progress list:
+// {type:'op', op:'mount'|'power', phase:'start'|'stage'|'done'|'error', message}
+function op(ws, name, phase, message) {
+  send(ws, { type: 'op', op: name, phase, message });
+}
+
 function handleKvmWs(ws, req, user) {
   if (!bmc) {
     send(ws, { type: 'status', state: 'error', message: `KVM backend unavailable on this install (${bmcError})` });
@@ -78,20 +84,58 @@ function handleKvmWs(ws, req, user) {
           sendInput(() => session.bmc.sendCad());
           break;
         case 'mount': {
-          // spec: server-side path or http(s) URL — async; outcome lands as a
-          // notice (mounted (fetched by the BMC) / proxied / error)
+          // spec: server-side path or http(s) URL — async; stages land as
+          // {type:'op'} + notices from the core's own sink
           const spec = String(msg.spec || '');
           if (session && spec) {
+            op(ws, 'mount', 'start', 'attaching media…');
             session.bmc
               .mountMedia(spec)
-              .then((m) => send(ws, { type: 'status', state: 'notice', message: String(m) }))
-              .catch((e) => send(ws, { type: 'status', state: 'notice', message: `mount failed: ${e.message}` }));
+              .then((m) => {
+                op(ws, 'mount', 'done', String(m));
+                send(ws, { type: 'status', state: 'notice', message: String(m) });
+                audit(user, 'bmc.mount', `${session.label} ${spec}`, req);
+              })
+              .catch((e) => {
+                op(ws, 'mount', 'error', `mount failed: ${e.message}`);
+                send(ws, { type: 'status', state: 'notice', message: `mount failed: ${e.message}` });
+              });
           }
           break;
         }
         case 'unmount':
+          op(ws, 'mount', 'start', 'ejecting media…');
           sendInput(() => session.bmc.unmountMedia());
+          op(ws, 'mount', 'done', 'media ejected');
+          send(ws, { type: 'status', state: 'notice', message: 'media ejected' });
           break;
+        case 'power': {
+          // Chassis power through the console's own creds + detected family —
+          // no re-detect, so the wait is the BMC's own API/IPMI round trip.
+          const action = String(msg.action || '');
+          if (!session || !session.spec) break;
+          if (!['on', 'off', 'reset', 'cycle', 'soft', 'mcreset'].includes(action)) break;
+          const label = action === 'mcreset' ? 'BMC reset' : `power ${action}`;
+          op(ws, 'power', 'start', `${label} → ${session.label}`);
+          op(ws, 'power', 'stage', 'sending to the BMC…');
+          const task =
+            action === 'mcreset'
+              ? bmc.bmcReset(session.spec)
+              : action === 'cycle'
+                ? bmc.ipmiPower(session.spec, action)
+                : bmc.powerCmd(session.spec, action, session.family || null);
+          task
+            .then((m) => {
+              op(ws, 'power', 'done', String(m));
+              send(ws, { type: 'status', state: 'notice', message: String(m) });
+              audit(user, 'bmc.power', `${session.label} ${action}`, req);
+            })
+            .catch((e) => {
+              op(ws, 'power', 'error', `power failed: ${e.message}`);
+              send(ws, { type: 'status', state: 'notice', message: `power failed: ${e.message}` });
+            });
+          break;
+        }
         case 'close': {
           const s = session;
           session = null;
@@ -162,6 +206,7 @@ function handleKvmWs(ws, req, user) {
       userId: user.id,
       label: spec.label,
       family: null,
+      spec: { host: spec.hostname, user: spec.username || '', pass },
       createdAt: Date.now(),
     };
     sessions.set(id, rec);
@@ -185,6 +230,9 @@ function handleKvmWs(ws, req, user) {
         send(out, { type: 'status', state: 'closed', message: 'console ended' });
         kill(s);
       } else if (kind === 'problem' || kind === 'notice') {
+        // The core's own mount stages ("mount: attaching …") land here —
+        // mirror them into the op stream so the client's progress list ticks.
+        if (body.startsWith('mount:')) op(out, 'mount', 'stage', body.slice(6).trim());
         send(out, { type: 'status', state: 'notice', message: body });
       }
     }
