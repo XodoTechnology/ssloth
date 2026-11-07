@@ -20,9 +20,10 @@ export default function BmcDashboard() {
   const [selected, setSelected] = useState(() => new Set());
   const [busy, setBusy] = useState(null); // bulk action label while running
   const [groups, setGroups] = useState([]);
+  const [worstFirst, setWorstFirst] = useState(false);
 
   const load = () =>
-    api('/api/bmc/overview').then(setData).catch((e) => setError(e.message));
+    api(`/api/bmc/overview${worstFirst ? '?sort=worst' : ''}`).then(setData).catch((e) => setError(e.message));
   const loadGroups = () =>
     api('/api/bmc/groups').then((d) => setGroups(d.groups || [])).catch(() => {});
 
@@ -31,7 +32,8 @@ export default function BmcDashboard() {
     loadGroups();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worstFirst]);
 
   const toggleSel = (id, e) => {
     e.stopPropagation();
@@ -104,6 +106,10 @@ export default function BmcDashboard() {
         <Activity size={18} className="text-emerald-400" />
         <h1 className="text-lg font-semibold text-zinc-100">BMC dashboard</h1>
         <span className="text-xs text-zinc-500">{data.hosts.length} host{data.hosts.length === 1 ? '' : 's'}</span>
+        <label className="ml-3 flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer" title="sort by bad sensors, then warnings">
+          <input type="checkbox" className="accent-emerald-500" checked={worstFirst} onChange={(e) => setWorstFirst(e.target.checked)} />
+          worst first
+        </label>
         {groups.length > 0 && (
           <select
             className="input !w-auto !py-1 text-xs ml-3"

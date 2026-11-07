@@ -28,7 +28,7 @@ and what "done" looks like. Check items off as they land.
       "Sensor alerts" editor on the BMC dashboard.
 - [x] **Persist sensor history** (`8fe3ffa`): `sensor_history` SQLite table,
       throttled writes alongside the in-memory ring; `/api/hosts/:id/sensors/history`
-      serves it. Rollups/worst-offenders sort still open.
+      serves it. Hourly/daily rollups still open.
 - [x] **Browser notifications** (`953378d`): Notification API alerts for new
       feed items (sensor alerts + watch hits), opt-in via the bell dropdown,
       click focuses tab + follows link. True Web Push (closed tab) deferred —
@@ -49,11 +49,14 @@ and what "done" looks like. Check items off as they land.
 
 ## Phase 4 — sharing + polish
 
-- [ ] **KVM console share links**: read-only (maybe control) share for BMC
-      consoles — `shares` table + ws plumbing exist for ssh sessions; kvm
-      sessions need frame fan-out (`session.ws` is single-consumer today)
-      plus a viewer client. Decide deliberately whether BMC consoles should
-      be shareable at all — they're the most sensitive surface.
+- [x] **KVM console share links** (`f88eb7a`): view-only shares for live BMC
+      consoles — `shares.kind`, ws/kvm framebuffer fan-out to viewers,
+      canvas viewer on SharePage, Share button in KvmPane. Verified
+      end-to-end on the Datto SP-X (59 frames fanned out, close propagated).
+      Control-mode shares deliberately unsupported — revisit only if a real
+      use case appears.
+- [x] **Worst-offenders sort**: `/api/bmc/overview?sort=worst` orders by bad
+      then warn sensor counts; dashboard "worst first" toggle.
 - [x] **API token scope docs**: README "API tokens" section — scopes, the
       route allowlist, WS exclusion, expiry. (`slo_` tokens were already
       enforced via `TOKEN_SCOPE_ROUTES`; they were just undocumented.)

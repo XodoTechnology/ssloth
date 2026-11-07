@@ -9,19 +9,30 @@ const { bmc, applyRoutes } = require('../bmc');
 
 const router = express.Router();
 
+const { sensorTier } = require('../sensor-tier');
+
 router.get('/overview', (req, res) => {
   const hosts = db
     .prepare("SELECT id, name, hostname, sensor_exclude, hostkey_status, hostkey_checked_at FROM hosts WHERE protocol = 'bmc' AND (user_id = ? OR shared = 1) ORDER BY name COLLATE NOCASE")
     .all(req.user.id);
-  res.json({
-    bmc_available: !!bmc,
-    hosts: hosts.map((h) => ({
+  const rows = hosts.map((h) => {
+    const latest = sensorsPoll.latest(h.id) || null;
+    // "Worst offenders" sort key: bad-tier sensors dominate, then warn.
+    const bad = (latest?.entries || []).filter((e) => sensorTier(e.status) === 'bad').length;
+    const warn = (latest?.entries || []).filter((e) => sensorTier(e.status) === 'warn').length;
+    return {
       ...h,
       sensor_exclude: !!h.sensor_exclude,
-      latest: sensorsPoll.latest(h.id) || null,
+      latest,
       sweep_error: sensorsPoll.lastErr(h.id),
-    })),
+      bad_count: bad,
+      warn_count: warn,
+    };
   });
+  if (req.query.sort === 'worst') {
+    rows.sort((a, b) => b.bad_count - a.bad_count || b.warn_count - a.warn_count || a.name.localeCompare(b.name));
+  }
+  res.json({ bmc_available: !!bmc, hosts: rows });
 });
 
 // ---- bulk actions across selected dashboard hosts ----
