@@ -48,7 +48,11 @@ router.delete('/rules/:id', (req, res) => {
 
 // ---- notification feed ----
 router.get('/', (req, res) => {
-  res.json({ notifications: notifications.list(req.user.id, { unreadOnly: req.query.unread === '1' }) });
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200);
+  res.json({
+    notifications: notifications.list(req.user.id, { unreadOnly: req.query.unread === '1', limit }),
+    unread: notifications.unreadCount(req.user.id),
+  });
 });
 
 router.get('/unread', (req, res) => {

@@ -1,34 +1,66 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, X } from 'lucide-react';
+import { Bell, CheckCheck, X, BellRing } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 
+const canNotify = () => typeof Notification !== 'undefined';
+
+// Browser Notification for a freshly-arrived feed item. Clicking it focuses
+// the tab and follows the item's link.
+function fireBrowserNotification(n, navigate) {
+  if (!canNotify() || Notification.permission !== 'granted') return;
+  try {
+    const note = new Notification(n.title, {
+      body: n.body || '',
+      icon: '/sloth.svg',
+      tag: `ssloth-${n.id}`, // same id => replaces, never stacks duplicates
+    });
+    note.onclick = () => {
+      window.focus();
+      if (n.link) navigate(n.link);
+      note.close();
+    };
+  } catch {}
+}
+
 // The bell: unread badge + dropdown of the latest notifications. Polls the
-// count on an interval and on window focus — sensor sweeps are minutes
-// apart, so 30s latency is invisible next to them.
+// feed on an interval and on window focus — sensor sweeps are minutes
+// apart, so 30s latency is invisible next to them. Newly-seen unread items
+// also raise an OS notification when the user has granted permission.
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [count, setCount] = useState(0);
   const [items, setItems] = useState([]);
+  const [perm, setPerm] = useState(canNotify() ? Notification.permission : 'unsupported');
   const ref = useRef(null);
+  const seenRef = useRef(null); // ids already surfaced as browser notifications
   const navigate = useNavigate();
-  const toast = useStore((s) => s.toast);
 
-  const refreshCount = () =>
-    api('/api/notifications/unread')
-      .then((d) => setCount(d.count || 0))
+  const refresh = () =>
+    api('/api/notifications?limit=20')
+      .then((d) => {
+        const list = d.notifications || [];
+        setCount(typeof d.unread === 'number' ? d.unread : list.filter((n) => !n.read).length);
+        // First poll seeds the seen-set silently; later polls notify on new ids.
+        if (seenRef.current === null) {
+          seenRef.current = new Set(list.map((n) => n.id));
+        } else {
+          for (const n of list) {
+            if (!n.read && !seenRef.current.has(n.id)) fireBrowserNotification(n, navigate);
+            seenRef.current.add(n.id);
+          }
+        }
+        setItems(list);
+      })
       .catch(() => {});
 
-  const loadItems = () =>
-    api('/api/notifications')
-      .then((d) => setItems(d.notifications || []))
-      .catch(() => {});
+  const loadItems = () => api('/api/notifications').then((d) => setItems(d.notifications || [])).catch(() => {});
 
   useEffect(() => {
-    refreshCount();
-    const t = setInterval(refreshCount, 30000);
-    const onFocus = () => refreshCount();
+    refresh();
+    const t = setInterval(refresh, 30000);
+    const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, []);
@@ -42,6 +74,12 @@ export default function NotificationBell() {
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, []);
+
+  const enableBrowser = async () => {
+    if (!canNotify()) return;
+    const p = await Notification.requestPermission();
+    setPerm(p);
+  };
 
   const open_item = async (n) => {
     if (!n.read) {
@@ -82,11 +120,19 @@ export default function NotificationBell() {
         <div className="absolute bottom-9 right-0 z-50 w-80 rounded-lg border border-ink-700 bg-ink-900 shadow-2xl">
           <div className="flex items-center justify-between border-b border-ink-700 px-3 py-2">
             <span className="text-xs font-semibold text-zinc-200">Notifications</span>
-            {count > 0 && (
-              <button className="text-[11px] text-zinc-400 hover:text-zinc-200 flex items-center gap-1" onClick={markAll}>
-                <CheckCheck size={12} /> mark all read
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {perm === 'default' && (
+                <button className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1" onClick={enableBrowser} title="Show OS notifications for new alerts">
+                  <BellRing size={12} /> enable alerts
+                </button>
+              )}
+              {perm === 'granted' && <BellRing size={12} className="text-emerald-400" title="browser notifications on" />}
+              {count > 0 && (
+                <button className="text-[11px] text-zinc-400 hover:text-zinc-200 flex items-center gap-1" onClick={markAll}>
+                  <CheckCheck size={12} /> mark all read
+                </button>
+              )}
+            </div>
           </div>
           <div className="max-h-80 overflow-y-auto">
             {items.length === 0 && <p className="px-3 py-4 text-xs text-zinc-500 text-center">nothing yet</p>}
