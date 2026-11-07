@@ -362,6 +362,18 @@ CREATE TABLE IF NOT EXISTS sensor_history (
   status   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_sensor_history_host ON sensor_history(host_id, t);
+
+CREATE TABLE IF NOT EXISTS host_groups (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE TABLE IF NOT EXISTS host_group_members (
+  group_id INTEGER NOT NULL REFERENCES host_groups(id) ON DELETE CASCADE,
+  host_id  INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, host_id)
+);
 `);
 
 function audit(user, action, detail, req) {
