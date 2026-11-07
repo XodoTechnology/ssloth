@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS shares (
   token_hash TEXT NOT NULL UNIQUE,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'ssh' CHECK (kind IN ('ssh','kvm')),
   label      TEXT NOT NULL DEFAULT '',
   mode       TEXT NOT NULL DEFAULT 'view' CHECK (mode IN ('view','control')),
   expires_at INTEGER NOT NULL,
@@ -159,6 +160,7 @@ ensureColumn('hosts', 'connect_cmd', 'connect_cmd TEXT');
 ensureColumn('hosts', 'hostkey_status', 'hostkey_status TEXT');
 ensureColumn('hosts', 'hostkey_checked_at', 'hostkey_checked_at INTEGER');
 ensureColumn('hosts', 'sensor_exclude', 'sensor_exclude INTEGER NOT NULL DEFAULT 0');
+ensureColumn('shares', 'kind', "kind TEXT NOT NULL DEFAULT 'ssh'");
 db.exec(`CREATE TABLE IF NOT EXISTS watches (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL,

@@ -3,6 +3,7 @@
 const { db, audit } = require('../db');
 const { sessions, attachViewer, detachViewer } = require('../ssh/manager');
 const { shareByToken } = require('../routes/shares');
+const { kvmSession, attachKvmViewer } = require('./kvm');
 
 // Public viewer WebSocket: /ws/share/<token>
 // Streams the owner's live terminal. 'control' shares can also send input.
@@ -16,6 +17,27 @@ function handleShareWs(ws, req, token) {
     send({ type: 'status', state: 'error', message: 'link expired or revoked' });
     return ws.close();
   }
+
+  // KVM console shares: the token attaches a view-only watcher to the live
+  // BmcSession — same framebuffer fan-out the owner sees, no input path.
+  if (share.kind === 'kvm') {
+    const ks = kvmSession(share.session_id);
+    if (!ks) {
+      send({ type: 'status', state: 'error', message: 'console has ended' });
+      return ws.close();
+    }
+    attachKvmViewer(ks, ws, share.id);
+    audit(null, 'share.kvm_viewer_joined', `'${share.label}'`, req);
+    const msLeft = share.expires_at * 1000 - Date.now();
+    const timer = setTimeout(() => {
+      send({ type: 'status', state: 'closed', message: 'share link expired' });
+      ws.close();
+    }, msLeft);
+    timer.unref();
+    ws.on('close', () => clearTimeout(timer));
+    return;
+  }
+
   const session = sessions.get(share.session_id);
   if (!session || !session.stream) {
     send({ type: 'status', state: 'error', message: 'session has ended' });

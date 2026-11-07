@@ -6,8 +6,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TermIcon, Eye, MousePointer2, Clock } from 'lucide-react';
+import { Terminal as TermIcon, Eye, MousePointer2, Clock, MonitorPlay } from 'lucide-react';
 import { api } from '../api';
+import { decodeFrame, paintFrame } from '../lib/kvm';
 
 const encoder = new TextEncoder();
 
@@ -25,6 +26,7 @@ export default function SharePage() {
     api(`/api/public/share/${token}`)
       .then((m) => {
         setMeta(m);
+        if (m.kind === 'kvm') return; // the canvas viewer owns its own socket
         term = new Terminal({
           cursorBlink: false,
           fontSize: 13,
@@ -102,10 +104,10 @@ export default function SharePage() {
     <div className="h-full flex flex-col bg-ink-950">
       <div className="flex items-center gap-3 px-4 h-12 border-b border-ink-700 bg-ink-900 shrink-0">
         <span className="text-emerald-400">
-          <TermIcon size={18} />
+          {meta?.kind === 'kvm' ? <MonitorPlay size={18} /> : <TermIcon size={18} />}
         </span>
         <span className="font-bold text-zinc-100">ssloth</span>
-        <span className="text-zinc-600 text-xs">shared session</span>
+        <span className="text-zinc-600 text-xs">{meta?.kind === 'kvm' ? 'shared console' : 'shared session'}</span>
         {meta && (
           <>
             <span className="text-sm text-zinc-300 font-mono truncate">{meta.label}</span>
@@ -138,6 +140,8 @@ export default function SharePage() {
             <p className="text-xs text-zinc-600 mt-1">ask the owner for a fresh link</p>
           </div>
         </div>
+      ) : meta?.kind === 'kvm' ? (
+        <KvmShareView token={token} />
       ) : (
         <div className="flex-1 relative min-h-0">
           <div ref={containerRef} className="absolute inset-0" />
@@ -146,6 +150,60 @@ export default function SharePage() {
               <div className="card px-6 py-4 text-sm text-zinc-300">{closed}</div>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Read-only BMC console for a kvm share link: same KVMF wire frames the
+// owner's KvmPane decodes, painted to a canvas. No input path exists.
+function KvmShareView({ token }) {
+  const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [state, setState] = useState({ status: 'connecting', msg: '' });
+
+  useEffect(() => {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/share/${token}`);
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        try {
+          const frame = decodeFrame(ev.data);
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+          if (canvas.width !== frame.width || canvas.height !== frame.height) {
+            canvas.width = frame.width;
+            canvas.height = frame.height;
+          }
+          paintFrame(canvas.getContext('2d'), frame);
+          setState((s) => (s.status === 'ready' ? s : { status: 'ready', msg: '' }));
+        } catch {}
+        return;
+      }
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === 'ready') setState({ status: 'ready', msg: '' });
+      else if (msg.type === 'status') {
+        setState({ status: msg.state === 'closed' || msg.state === 'error' ? msg.state : 'connecting', msg: msg.message || '' });
+      }
+    };
+    ws.onclose = () => setState({ status: 'closed', msg: 'share ended' });
+    return () => { try { ws.close(); } catch {} };
+  }, [token]);
+
+  // Keep the canvas centered at native res, scaled to fit — same letterbox
+  // approach the owner pane uses via CSS.
+  return (
+    <div ref={wrapRef} className="flex-1 relative min-h-0 bg-black flex items-center justify-center overflow-hidden">
+      <canvas ref={canvasRef} className="max-w-full max-h-full object-contain" style={{ imageRendering: 'pixelated' }} />
+      {state.status !== 'ready' && (
+        <div className="absolute inset-0 bg-ink-950/85 flex items-center justify-center">
+          <div className="card px-6 py-4 text-sm text-zinc-300 flex items-center gap-2">
+            {state.status === 'connecting' ? <MonitorPlay size={16} className="animate-pulse text-emerald-400" /> : null}
+            {state.msg || (state.status === 'connecting' ? 'connecting to console…' : state.status)}
+          </div>
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { decodeFrame, paintFrame, hidFor, usKey } from '../lib/kvm';
+import { api } from '../api';
 import { useStore } from '../store';
 import Modal from './Modal';
 
@@ -169,6 +170,22 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
 
   const sendJson = (o) => wsRef.current?.readyState === 1 && wsRef.current.send(JSON.stringify(o));
 
+  // View-only share link for this console — anyone with the URL watches the
+  // same framebuffer; the token is the credential and expires on its own.
+  async function shareConsole() {
+    try {
+      const r = await api('/api/shares', {
+        method: 'POST',
+        body: { session_id: sessionRef.current, kind: 'kvm', mode: 'view', ttl_minutes: 60 },
+      });
+      const url = `${location.origin}${r.share.url}`;
+      try { await navigator.clipboard.writeText(url); } catch {}
+      toast('view-only console link copied (expires in 1h)', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
   // Wipe the framebuffer — a closed/error console shouldn't keep showing the
   // last frame it received behind the overlay.
   const clearCanvas = () => {
@@ -274,6 +291,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
       )}
       {focused && st.status === 'ready' && (
         <div className="absolute top-2 right-2 flex gap-1 opacity-70 hover:opacity-100">
+          <button className="btn-ghost text-xs px-2 py-1" onClick={shareConsole}>Share</button>
           <button className="btn-ghost text-xs px-2 py-1" onClick={() => setPasteOpen(true)}>Paste</button>
           <button className="btn-ghost text-xs px-2 py-1" onClick={() => setMountOpen(true)}>Mount ISO</button>
           <button className="btn-ghost text-xs px-2 py-1" onClick={() => sendJson({ type: 'cad' })}>Ctrl+Alt+Del</button>

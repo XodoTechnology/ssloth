@@ -51,6 +51,10 @@ function killSession(s) {
   if (!s) return;
   sessions.delete(s.id);
   if (s.takeoverPoll) clearInterval(s.takeoverPoll);
+  for (const v of s.viewers || []) {
+    try { send(v.ws, { type: 'status', state: 'closed', message: 'console ended' }); v.ws.close(); } catch {}
+  }
+  s.viewers?.clear();
   try {
     s.bmc.close();
   } catch {}
@@ -284,7 +288,11 @@ function handleKvmWs(ws, req, user) {
       (_err, line) => onEvent(String(line ?? '')),
       (_err, frame) => {
         const s = sessions.get(id);
-        if (frame && s?.ws && s.ws.readyState === 1) s.ws.send(Buffer.from(frame));
+        if (!frame || !s) return;
+        const buf = Buffer.from(frame);
+        if (s.ws && s.ws.readyState === 1) s.ws.send(buf);
+        // Share-link viewers get the same framebuffer, view-only.
+        for (const v of s.viewers) if (v.ws.readyState === 1) v.ws.send(buf);
       }
     );
 
@@ -297,6 +305,7 @@ function handleKvmWs(ws, req, user) {
       family: null,
       spec: { host: spec.hostname, user: spec.username || '', pass },
       mediaFiles: new Set(),
+      viewers: new Set(), // share-link watchers: {ws, shareId} — view-only
       detachedAt: null,
       createdAt: Date.now(),
     };
@@ -310,26 +319,32 @@ function handleKvmWs(ws, req, user) {
     function onEvent(line) {
       const s = sessions.get(id);
       const out = s?.ws || ws;
+      // Console lifecycle/status goes to share viewers too — they're
+      // watching the same screen and need to know when it ends.
+      const fan = (obj) => {
+        send(out, obj);
+        if (s) for (const v of s.viewers) send(v.ws, obj);
+      };
       const [kind, ...rest] = line.split(':');
       const body = rest.join(':');
       if (kind === 'ready') {
         const [title, family] = body.split(':');
         s.family = family;
-        send(out, { type: 'ready', sessionId: id, title, family });
+        fan({ type: 'ready', sessionId: id, title, family });
         pushTakeover(s);
         audit(user, 'kvm.connect', spec.label, req);
       } else if (kind === 'progress') {
-        send(out, { type: 'status', state: 'connecting', message: body });
+        fan({ type: 'status', state: 'connecting', message: body });
       } else if (kind === 'error') {
-        send(out, { type: 'status', state: 'error', message: body });
+        fan({ type: 'status', state: 'error', message: body });
       } else if (kind === 'ended') {
-        send(out, { type: 'status', state: 'closed', message: 'console ended' });
+        fan({ type: 'status', state: 'closed', message: 'console ended' });
         killSession(s);
       } else if (kind === 'problem' || kind === 'notice') {
         // The core's own mount stages ("mount: attaching …") land here —
         // mirror them into the op stream so the client's progress list ticks.
         if (body.startsWith('mount:')) op(out, 'mount', 'stage', body.slice(6).trim());
-        send(out, { type: 'status', state: 'notice', message: body });
+        fan({ type: 'status', state: 'notice', message: body });
       }
     }
   }
@@ -337,4 +352,28 @@ function handleKvmWs(ws, req, user) {
 
 }
 
-module.exports = { handleKvmWs };
+// Share-link plumbing: the shares router validates ownership/liveness, the
+// public share ws attaches viewers here. View-only — viewers never send input.
+function kvmSession(id) {
+  return sessions.get(String(id || ''));
+}
+
+function attachKvmViewer(s, ws, shareId) {
+  const v = { ws, shareId };
+  s.viewers.add(v);
+  send(ws, { type: 'ready', label: s.label, mode: 'view', sessionKind: 'kvm' });
+  ws.on('close', () => s.viewers.delete(v));
+}
+
+function closeKvmViewersByShare(shareId) {
+  for (const s of sessions.values()) {
+    for (const v of [...(s.viewers || [])]) {
+      if (v.shareId === shareId) {
+        s.viewers.delete(v);
+        try { send(v.ws, { type: 'status', state: 'closed', message: 'share revoked' }); v.ws.close(); } catch {}
+      }
+    }
+  }
+}
+
+module.exports = { handleKvmWs, kvmSession, attachKvmViewer, closeKvmViewersByShare };
