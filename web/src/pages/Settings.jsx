@@ -810,6 +810,24 @@ export default function Settings() {
                   <button className="btn-ghost !py-1 text-xs" onClick={() => resetPw(u)}>
                     reset pw
                   </button>
+                  {u.totp_enabled && u.id !== user.id && (
+                    <button
+                      className="btn-ghost !py-1 text-xs hover:text-amber-400"
+                      title="clear this user's 2FA — lockout recovery"
+                      onClick={async () => {
+                        if (!confirm(`Reset 2FA for ${u.username}? They'll log in with password only until they re-enroll.`)) return;
+                        try {
+                          await api(`/api/admin/users/${u.id}/totp-reset`, { method: 'POST' });
+                          toast(`2FA reset for ${u.username}`, 'success');
+                          loadUsers();
+                        } catch (e) {
+                          toast(e.message, 'error');
+                        }
+                      }}
+                    >
+                      reset 2fa
+                    </button>
+                  )}
                   {u.id !== user.id && (
                     <button className="btn-ghost !p-1.5 hover:text-red-400" onClick={() => deleteUser(u)}>
                       <Trash2 size={13} />

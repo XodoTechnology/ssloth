@@ -3,7 +3,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { auditReq } = require('../auth');
-const { postWebhook } = require('../notify');
+const { postWebhook, assertPublicHost } = require('../notify');
 
 const router = express.Router();
 
@@ -19,9 +19,12 @@ router.get('/', (req, res) => {
   res.json({ webhooks: rows.map((r) => ({ ...r, created_at: r.created_at * 1000 })) });
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const url = validUrl(req.body?.url);
   if (!url) return res.status(400).json({ error: 'valid http(s) URL required' });
+  if (!(await assertPublicHost(url))) {
+    return res.status(400).json({ error: 'webhook host must resolve to a public address' });
+  }
   const events = String(req.body?.events || '*').slice(0, 200);
   const count = db.prepare('SELECT COUNT(*) AS n FROM webhooks WHERE user_id = ?').get(req.user.id).n;
   if (count >= 20) return res.status(400).json({ error: 'webhook limit reached (20)' });
@@ -30,11 +33,14 @@ router.post('/', (req, res) => {
   res.json({ webhook: { id: info.lastInsertRowid, url, events, enabled: 1 } });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const row = db.prepare('SELECT * FROM webhooks WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
   const url = req.body.url !== undefined ? validUrl(req.body.url) : row.url;
   if (url === null) return res.status(400).json({ error: 'valid http(s) URL required' });
+  if (!(await assertPublicHost(url))) {
+    return res.status(400).json({ error: 'webhook host must resolve to a public address' });
+  }
   const events = req.body.events !== undefined ? String(req.body.events).slice(0, 200) : row.events;
   const enabled = req.body.enabled !== undefined ? (req.body.enabled ? 1 : 0) : row.enabled;
   db.prepare('UPDATE webhooks SET url = ?, events = ?, enabled = ? WHERE id = ?').run(url, events, enabled, row.id);

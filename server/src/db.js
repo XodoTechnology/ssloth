@@ -228,7 +228,11 @@ ensureColumn('hosts', 'use_count', 'use_count INTEGER NOT NULL DEFAULT 0');
                       CHECK (protocol IN ('ssh','telnet','bmc')),
         mac           TEXT NOT NULL DEFAULT '',
         agent_forward INTEGER NOT NULL DEFAULT 0,
-        use_count     INTEGER NOT NULL DEFAULT 0
+        use_count     INTEGER NOT NULL DEFAULT 0,
+        connect_cmd   TEXT,
+        hostkey_status TEXT,
+        hostkey_checked_at INTEGER,
+        sensor_exclude INTEGER NOT NULL DEFAULT 0
       )`);
       const inNew = new Set(db.prepare('PRAGMA table_info(hosts_new)').all().map((c) => c.name));
       const common = cols.filter((c) => inNew.has(c));

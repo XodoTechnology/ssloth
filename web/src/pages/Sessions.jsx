@@ -361,7 +361,6 @@ export default function Sessions() {
           }
         />
       )}
-      />
       <div className="min-w-0 flex-1">
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {h.name}

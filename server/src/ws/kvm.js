@@ -17,15 +17,43 @@
 //   {type:'status', state:'connecting'|'ready'|'error'|'closed', message}
 //   {type:'ready', sessionId, title, family}
 
+const fs = require('fs');
+const path = require('path');
 const { audit } = require('../db');
 const { resolveConnectSpec } = require('../ssh/manager');
 
 // The vendored bmc-core napi addon, shared with the BMC host-command routes.
 const { bmc, bmcError, applyRoutes, chainToRoutes } = require('../bmc');
 
-// Persistent sessions, same model as ssh: detach keeps the console alive.
+// Persistent sessions, same model as ssh: detach keeps the console alive —
+// but a *detached* console dies on the same TTL ssh uses, and each user is
+// capped, so a wedged BMC can't leak bastion tunnels forever.
 const sessions = new Map(); // id -> {id, bmc, ws, label, createdAt}
+const MEDIA_DIR = path.join(__dirname, '..', '..', 'data', 'media');
+const MAX_KVM_PER_USER = 8;
+const KVM_DETACHED_TTL_MS = 60 * 60 * 1000;
 let seq = 0;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const s of [...sessions.values()]) {
+    if (s.detachedAt && now - s.detachedAt > KVM_DETACHED_TTL_MS) killSession(s);
+  }
+}, 5 * 60 * 1000).unref();
+
+// End a console: release the BMC handles and unlink any staged media files
+// this session mounted (uploads live under data/media and are per-session).
+function killSession(s) {
+  if (!s) return;
+  sessions.delete(s.id);
+  try {
+    s.bmc.close();
+  } catch {}
+  for (const f of s.mediaFiles || []) {
+    if (f.startsWith(MEDIA_DIR + path.sep)) fs.unlink(f, () => {});
+  }
+  if (s.ws && s.ws.readyState === 1) send(s.ws, { type: 'status', state: 'closed' });
+}
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -45,7 +73,9 @@ function handleKvmWs(ws, req, user) {
   }
   let session = null;
 
+  // Any inbound message means a live socket is driving this console.
   ws.on('message', (data, isBinary) => {
+    if (session) session.detachedAt = null;
     if (isBinary) return; // browser sends no binary; input is JSON
     let msg;
     try {
@@ -64,6 +94,7 @@ function handleKvmWs(ws, req, user) {
           if (s.userId !== user.id) break;
           session = s;
           s.ws = ws;
+          s.detachedAt = null;
           send(ws, { type: 'ready', sessionId: s.id, title: s.label, family: s.family, reattached: true });
           audit(user, 'kvm.reattach', s.label, req);
           break;
@@ -88,6 +119,8 @@ function handleKvmWs(ws, req, user) {
           // {type:'op'} + notices from the core's own sink
           const spec = String(msg.spec || '');
           if (session && spec) {
+            // A staged file under data/media is ours to clean up on kill.
+            if (spec.startsWith(MEDIA_DIR + path.sep)) session.mediaFiles.add(spec);
             op(ws, 'mount', 'start', 'attaching media…');
             session.bmc
               .mountMedia(spec)
@@ -139,7 +172,7 @@ function handleKvmWs(ws, req, user) {
         case 'close': {
           const s = session;
           session = null;
-          if (s) kill(s);
+          if (s) killSession(s);
           break;
         }
       }
@@ -149,8 +182,11 @@ function handleKvmWs(ws, req, user) {
   });
 
   ws.on('close', () => {
-    // detach — the console keeps running for reattach
-    if (session && session.ws === ws) session.ws = null;
+    // detach — the console keeps running for reattach, but only for the TTL
+    if (session && session.ws === ws) {
+      session.ws = null;
+      if (!session.detachedAt) session.detachedAt = Date.now();
+    }
     session = null;
   });
 
@@ -177,6 +213,12 @@ function handleKvmWs(ws, req, user) {
     }
 
     const pass = spec.password || msg.password || '';
+    let mine = 0;
+    for (const s of sessions.values()) if (s.userId === user.id) mine++;
+    if (mine >= MAX_KVM_PER_USER) {
+      send(ws, { type: 'status', state: 'error', message: `KVM session limit reached (${MAX_KVM_PER_USER})` });
+      return;
+    }
     send(ws, { type: 'status', state: 'connecting', message: `connecting to ${spec.label} …` });
 
     // Bastion chain → bmc route table (installed globally by addr).
@@ -207,6 +249,8 @@ function handleKvmWs(ws, req, user) {
       label: spec.label,
       family: null,
       spec: { host: spec.hostname, user: spec.username || '', pass },
+      mediaFiles: new Set(),
+      detachedAt: null,
       createdAt: Date.now(),
     };
     sessions.set(id, rec);
@@ -228,7 +272,7 @@ function handleKvmWs(ws, req, user) {
         send(out, { type: 'status', state: 'error', message: body });
       } else if (kind === 'ended') {
         send(out, { type: 'status', state: 'closed', message: 'console ended' });
-        kill(s);
+        killSession(s);
       } else if (kind === 'problem' || kind === 'notice') {
         // The core's own mount stages ("mount: attaching …") land here —
         // mirror them into the op stream so the client's progress list ticks.
@@ -238,14 +282,7 @@ function handleKvmWs(ws, req, user) {
     }
   }
 
-  function kill(s) {
-    if (!s) return;
-    sessions.delete(s.id);
-    try {
-      s.bmc.close();
-    } catch {}
-    if (s.ws && s.ws.readyState === 1) send(s.ws, { type: 'status', state: 'closed' });
-  }
+
 }
 
 module.exports = { handleKvmWs };

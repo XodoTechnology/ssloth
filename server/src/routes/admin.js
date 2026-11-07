@@ -84,6 +84,20 @@ router.post('/users/:id/password', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Lockout recovery: clear a user's second factor. Requires admin; kills
+// their sessions + runtime so nothing keeps running under the old auth.
+router.post('/users/:id/totp-reset', requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'not found' });
+  db.prepare(
+    'UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = 0 WHERE id = ?'
+  ).run(target.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id);
+  killUserRuntime(target.id);
+  auditReq(req, 'user.totp_reset', `user '${target.username}'`);
+  res.json({ ok: true });
+});
+
 router.delete('/users/:id', requireAdmin, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'not found' });

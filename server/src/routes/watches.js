@@ -5,6 +5,16 @@ const { auditReq } = require('../auth');
 const { invalidate } = require('../watch');
 
 const router = express.Router();
+
+// Catastrophic-backtracking guard: Node regex can't be interrupted, so a
+// pattern like (a+)+$ would stall the event loop on every output chunk.
+// Reject groups that contain a quantifier and are themselves quantified —
+// the classic exponential shape. Not a proof, but it catches the real cases.
+const NESTED_QUANT_RE = /\((?:[^()\\]|\\.|\[[^\]]*\])*[+*{][^()]*\)\s*[+*{?]/;
+function redosRisk(pattern) {
+  return NESTED_QUANT_RE.test(pattern);
+}
+
 const view = (r) => ({ id: r.id, host_id: r.host_id, label: r.label, pattern: r.pattern, enabled: !!r.enabled, created_at: r.created_at });
 
 router.get('/', (req, res) => {
@@ -16,6 +26,9 @@ router.post('/', (req, res) => {
   const { label, pattern, host_id, enabled } = req.body || {};
   if (!pattern || typeof pattern !== 'string') return res.status(400).json({ error: 'pattern required' });
   try { new RegExp(pattern, 'i'); } catch { return res.status(400).json({ error: 'invalid regex' }); }
+  if (redosRisk(pattern)) {
+    return res.status(400).json({ error: 'pattern looks like it can backtrack catastrophically — simplify it' });
+  }
   const info = db
     .prepare('INSERT INTO watches (user_id, host_id, label, pattern, enabled) VALUES (?, ?, ?, ?, ?)')
     .run(req.user.id, host_id ? parseInt(host_id, 10) : null,

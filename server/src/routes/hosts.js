@@ -454,16 +454,57 @@ router.get('/:id/bmc-detect', async (req, res) => {
 
 // ISO upload for virtual media: raw body to data/media/, then mounted via
 // the console's mount call with the returned server-side path.
-router.put('/:id/media-upload', express.raw({ type: () => true, limit: '8gb' }), (req, res) => {
+// ISO staging area: uploads land here until a KVM session mounts them. The
+// kvm ws deletes files a session mounted when that session dies; this sweep
+// catches orphans (crashed sessions, files never mounted).
+const MEDIA_DIR = path.join(__dirname, '..', '..', 'data', 'media');
+const MEDIA_CAP = 8 * 1024 * 1024 * 1024; // 8GB per image
+const MEDIA_ORPHAN_MS = 24 * 60 * 60 * 1000;
+fs.mkdirSync(MEDIA_DIR, { recursive: true });
+setInterval(() => {
+  try {
+    const cutoff = Date.now() - MEDIA_ORPHAN_MS;
+    for (const f of fs.readdirSync(MEDIA_DIR)) {
+      const p = path.join(MEDIA_DIR, f);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+      } catch {}
+    }
+  } catch {}
+}, 60 * 60 * 1000).unref();
+
+// Streamed, not buffered — an 8GB ISO must never sit in RAM. The request
+// body pipes straight to disk; over-cap aborts mid-write and unlinks.
+router.put('/:id/media-upload', (req, res) => {
   const own = db.prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(req.params.id, req.user.id);
   if (!own) return res.status(404).json({ error: 'not found' });
   const name = path.basename(String(req.query.name || 'image.iso')).replace(/[^\w.\- ]/g, '_');
-  const dir = path.join(__dirname, '..', '..', 'data', 'media');
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${own.id}-${Date.now()}-${name}`);
-  fs.writeFileSync(file, req.body || Buffer.alloc(0));
-  auditReq(req, 'bmc.media_upload', name);
-  res.json({ path: file });
+  const file = path.join(MEDIA_DIR, `${own.id}-${Date.now()}-${name}`);
+  const out = fs.createWriteStream(file);
+  let received = 0;
+  let done = false;
+  const fail = (status, msg) => {
+    if (done) return;
+    done = true;
+    req.unpipe(out);
+    out.destroy();
+    fs.unlink(file, () => {});
+    if (!res.headersSent) res.status(status).json({ error: msg });
+    req.resume();
+  };
+  req.on('data', (c) => {
+    received += c.length;
+    if (received > MEDIA_CAP) fail(413, 'image exceeds 8GB limit');
+  });
+  req.on('error', () => fail(400, 'upload failed'));
+  out.on('error', () => fail(500, 'could not write image'));
+  out.on('finish', () => {
+    if (done) return;
+    done = true;
+    auditReq(req, 'bmc.media_upload', name);
+    res.json({ path: file });
+  });
+  req.pipe(out);
 });
 
 module.exports = router;

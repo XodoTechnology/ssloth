@@ -79,6 +79,8 @@ router.post('/export', async (req, res) => {
       color: h.color,
       notes: h.notes,
       keepalive: h.keepalive,
+      connect_cmd: h.connect_cmd || null,
+      sensor_exclude: h.sensor_exclude ? 1 : 0,
       credential_name: h.credential_id ? credById.get(h.credential_id)?.name || null : null,
       jump_host_name: h.jump_host_id ? hostById.get(h.jump_host_id)?.name || null : null,
     };
@@ -229,8 +231,8 @@ router.post('/import', async (req, res) => {
         .prepare(
           `INSERT INTO hosts (user_id, name, hostname, port, username, auth_type, credential_id,
             password_enc, folder, region, tags, pinned, record, shared, color, notes, keepalive,
-            protocol, mac, agent_forward)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            protocol, mac, agent_forward, connect_cmd, sensor_exclude)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           req.user.id,
@@ -252,9 +254,11 @@ router.post('/import', async (req, res) => {
           String(h.color || '').slice(0, 32),
           String(h.notes || '').slice(0, 4000),
           parseInt(h.keepalive, 10) || 15,
-          h.protocol === 'telnet' ? 'telnet' : 'ssh',
+          ['ssh', 'telnet', 'bmc'].includes(h.protocol) ? h.protocol : 'ssh',
           (h.mac ? String(h.mac).slice(0, 17).toUpperCase() : ''),
-          h.agent_forward ? 1 : 0
+          h.agent_forward ? 1 : 0,
+          String(h.connect_cmd || '').slice(0, 500) || null,
+          h.sensor_exclude ? 1 : 0
         );
       hostNameToId.set(h.name, info.lastInsertRowid);
       if (h.jump_host_name) pendingJumps.push({ hostId: info.lastInsertRowid, jumpHostName: h.jump_host_name });
