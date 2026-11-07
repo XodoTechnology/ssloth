@@ -39,7 +39,7 @@ export default function TransfersTray() {
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-xs text-slate-200" title={t.name}>{t.name}</span>
                   <span className="shrink-0 text-[10px] text-slate-500">
-                    {t.state === 'active' ? `${t.pct}%` : t.state === 'done' ? 'done' : 'failed'}
+                    {t.state === 'active' ? (t.retry ? `retry ${t.retry} · ${t.pct}%` : `${t.pct}%`) : t.state === 'done' ? 'done' : 'failed'}
                   </span>
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-800">

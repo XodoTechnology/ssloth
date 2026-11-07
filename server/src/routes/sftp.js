@@ -199,15 +199,28 @@ router.post('/:sid/upload', async (req, res) => {
     const ws = ctx.sftp.createWriteStream(full, req.query.append === '1' ? { flags: 'a' } : {});
     await new Promise((resolve, reject) => {
       let received = 0;
-      ws.on('error', reject);
-      req.on('error', reject);
-      ws.on('close', resolve);
+      let settled = false;
+      const fail = (e) => {
+        if (settled) return;
+        settled = true;
+        // Destroy the remote stream too — otherwise bytes already buffered
+        // keep landing after the client is gone, and a resume that stats the
+        // remote size races a file that is still growing.
+        ws.destroy();
+        reject(e);
+      };
+      ws.on('error', fail);
+      req.on('error', fail);
+      // Client went away mid-body: 'close' without 'end' (req.complete stays
+      // false). 'aborted' covers older runtimes.
+      req.on('aborted', () => fail(Object.assign(new Error('upload interrupted'), { code: 'aborted' })));
+      req.on('close', () => { if (!req.complete) fail(Object.assign(new Error('upload interrupted'), { code: 'aborted' })); });
+      ws.on('close', () => { if (!settled) { settled = true; resolve(); } });
       req.on('data', (chunk) => {
         received += chunk.length;
         if (received > UPLOAD_CAP) {
           req.unpipe(ws);
-          ws.destroy();
-          reject(Object.assign(new Error('file too large'), { code: 'too_large' }));
+          fail(Object.assign(new Error('file too large'), { code: 'too_large' }));
           req.resume(); // drain the rest so the socket stays clean
         }
       });

@@ -15,6 +15,20 @@ async function remoteSize(sessionId, p) {
   } catch { return 0; }
 }
 
+/// Stat until the remote size stops moving. A just-interrupted upload keeps
+/// landing bytes the server already buffered for a moment after the socket
+/// died — appending against a still-growing file duplicates the overlap.
+async function stableRemoteSize(sessionId, p) {
+  let last = -1;
+  let cur = await remoteSize(sessionId, p);
+  for (let i = 0; i < 8 && cur !== last; i++) {
+    last = cur;
+    await new Promise((r) => setTimeout(r, 350));
+    cur = await remoteSize(sessionId, p);
+  }
+  return cur;
+}
+
 export function startUpload(sessionId, dir, file, label) {
   const id = `tr${++seq}-${Date.now().toString(36)}`;
   const store = useStore.getState();
@@ -33,11 +47,17 @@ export function startUpload(sessionId, dir, file, label) {
   return id;
 }
 
+/// Backoff between resume attempts — each retry re-stats the remote and
+/// appends only what is still missing, so an interrupted upload picks up
+/// where it stopped instead of starting over.
+const RETRY_DELAYS = [2000, 5000, 10000, 20000, 30000];
+
 /// The upload proper — resumes part-sent files: stat the remote, slice the
-/// local File at that offset, and open the stream in append mode.
-export async function runUpload(id, sessionId, dir, file, label) {
+/// local File at that offset, and open the stream in append mode. Network
+/// failures and 5xx retry with backoff; 4xx fails immediately.
+export async function runUpload(id, sessionId, dir, file, label, attempt = 0) {
   const target = `${dir}/${file.name}`;
-  const have = await remoteSize(sessionId, target);
+  const have = await stableRemoteSize(sessionId, target);
   let body = file;
   let append = false;
   if (have > 0 && have < file.size) {
@@ -53,7 +73,7 @@ export async function runUpload(id, sessionId, dir, file, label) {
 
   const done = (state, pct, error) => {
     const s = useStore.getState();
-    s.updateTransfer(id, { state, pct, error });
+    s.updateTransfer(id, { state, pct, error, retry: 0 });
     if (state === 'done') s.toast(`Uploaded ${file.name} → ${label}`, 'success');
     else s.toast(`Upload failed: ${file.name} → ${label}${error ? ` (${error})` : ''}`, 'error');
     setTimeout(() => useStore.getState().removeTransfer(id), 30000);
@@ -77,10 +97,26 @@ export async function runUpload(id, sessionId, dir, file, label) {
     }
   };
   return new Promise((resolve) => {
+    const retry = (why) => {
+      if (attempt >= RETRY_DELAYS.length) {
+        done('error', undefined, why);
+        resolve(false);
+        return;
+      }
+      const n = attempt + 1;
+      useStore.getState().updateTransfer(id, { state: 'active', retry: n });
+      setTimeout(() => {
+        // The user may have dismissed the row — don't resurrect it.
+        if (!useStore.getState().transfers.some((t) => t.id === id)) return resolve(false);
+        runUpload(id, sessionId, dir, file, label, n).then(resolve);
+      }, RETRY_DELAYS[attempt]);
+    };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         done('done', 100);
         resolve(true);
+      } else if (xhr.status >= 500) {
+        retry(`server error ${xhr.status}`);
       } else {
         let msg = '';
         try {
@@ -90,7 +126,8 @@ export async function runUpload(id, sessionId, dir, file, label) {
         resolve(false);
       }
     };
-    xhr.onerror = () => { done('error'); resolve(false); };
+    xhr.onerror = () => retry('connection lost');
+    xhr.ontimeout = () => retry('timed out');
     xhr.send(body);
   });
 }
