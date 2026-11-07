@@ -36,6 +36,21 @@ const authLimiter = rateLimit({
   message: { error: 'too many attempts, try again later' },
 });
 
+// Per-username cap on top of the per-IP one: credential stuffing that
+// rotates source IPs still hits a wall after a handful of tries against
+// the same account. Falls back to IP when no username is supplied.
+const loginUserLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const u = String(req.body?.username || '').trim().toLowerCase();
+    return u ? `u:${u}` : `ip:${req.ip}`;
+  },
+  message: { error: 'too many attempts for this account, try again later' },
+});
+
 const USERNAME_RE = /^[a-zA-Z0-9_.-]{2,32}$/;
 
 function publicUser(u) {
@@ -85,7 +100,7 @@ router.post('/setup', authLimiter, async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
-router.post('/login', authLimiter, async (req, res) => {
+router.post('/login', authLimiter, loginUserLimiter, async (req, res) => {
   const { username, password, totp } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username || '');
   const ok = await verifyPassword(String(password || ''), user ? user.password_hash : DUMMY_HASH);

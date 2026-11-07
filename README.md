@@ -261,6 +261,27 @@ npm run build              # produce web/dist (served by the server in prod)
 | `PORT`, `BIND` | Listen address (default `0.0.0.0:8080`). |
 | `SSLOTH_ALLOW_PUBLIC_TUNNELS` | `true` lets **admins** bind tunnels to non-loopback addresses. Default `false` — tunnels always bind `127.0.0.1`/`::1`. |
 
+## API tokens
+
+Settings → API tokens issues `slo_…` bearer tokens for scripts and
+integrations. Send `Authorization: Bearer slo_…` instead of a session
+cookie; CSRF/origin checks don't apply to bearer requests.
+
+Scopes gate routes by method+path — a token can never exceed its scopes:
+
+| Scope | Allows |
+| --- | --- |
+| `read` | `GET` on `/api/hosts`, `/api/snippets`, `/api/playbooks`, `/api/tunnels`, `/api/recordings`, `/api/credentials` |
+| `playbooks:run` | `POST /api/playbooks/:id/run` |
+| `vault` | `POST /api/vault/export` |
+
+Anything else — mutations, websockets (`/ws/*`), BMC commands, shares —
+returns 403 regardless of scope. Tokens are shown once at creation;
+only their SHA-256 is stored. Expiry is optional (max 365 days).
+
+Login is rate-limited per source IP (30/15min) **and** per username
+(8/15min) so credential stuffing that rotates IPs still stalls.
+
 ## Production notes
 
 - Always run behind TLS (nginx/caddy/traefik) and set `SSLOTH_SECURE_COOKIES=true`.

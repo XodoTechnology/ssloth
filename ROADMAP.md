@@ -5,57 +5,64 @@ and what "done" looks like. Check items off as they land.
 
 ## Phase 1 — close the verification gaps (no new code, just hardware time)
 
-- [ ] **SP-X/Gooxi**: preview snapshot, BMC reset, unmount, seize/takeover
-      negotiation — console/power/sensors/SEL/media all proven; these four
-      paths exist but are unverified on live hardware.
+- [x] **SP-X/Gooxi**: preview snapshot, BMC reset, unmount, seize/takeover —
+      preview/reset/unmount/same-user takeover verified on the Datto SP-X
+      (10.51.0.10); different-user takeover prompt still needs a second
+      BMC account to prove.
 - [ ] **CIMC (UCS C220)**: power + reset — wired but deliberately untested.
-- [ ] **iLO5**: seize/takeover negotiation on a contended console.
-- [ ] **SFTP resume**: interrupt a real transfer mid-flight (kill server,
-      flap the link) and confirm `append=1` picks up where it left off.
+      Blocked: no working credentials (cloudie/? and Administrator/? both
+      rejected).
+- [ ] **iLO5**: seize/takeover negotiation on a contended console. Blocked:
+      Administrator credentials rejected.
+- [x] **SFTP resume**: auto-resume shipped (`f96f042`) — verified end-to-end
+      with exact size + SHA-256 match after interruption.
 - [ ] **BMC dashboard**: live-verify exclusion toggle + sweep error surfacing
       on the deployed build.
 
-## Phase 2 — alerting (builds on sensors-poll data that already exists)
+## Phase 2 — alerting ✅ landed
 
-- [ ] **Sensor alert rules**: per-host or fleet rules
-      (`sensor matches X`, `status != ok`, `reading > threshold`) →
-      webhook + toast + audit on state *transitions* only (no spam on every
-      poll). Store rules in a `sensor_rules` table; evaluate inside
-      `sensors-poll.js` sweep; notify via `notify.js` + `watch_hit`-style
-      ws push.
-- [ ] **Persist sensor history**: roll samples into SQLite
-      (`sensor_samples` table or hourly rollup) so trends survive restarts;
-      feed the existing sparklines + add a fleet-wide "worst offenders"
-      sort on `/api/bmc/overview`.
-- [ ] **Browser push for watch hits + sensor alerts**: Notification API
-      permission in Settings; fire on `watch_hit` and alert transitions
-      even when the tab is backgrounded.
+- [x] **Sensor alert rules** (`8fe3ffa`): `sensor_alert_rules` table, per-host /
+      per-sensor / warn-or-bad floors, evaluated on status-tier *transitions*
+      in `sensors-poll.js`; recovery notices too. Delivery: in-app bell,
+      registered webhooks (SSRF-guarded), audit records. UI: collapsible
+      "Sensor alerts" editor on the BMC dashboard.
+- [x] **Persist sensor history** (`8fe3ffa`): `sensor_history` SQLite table,
+      throttled writes alongside the in-memory ring; `/api/hosts/:id/sensors/history`
+      serves it. Rollups/worst-offenders sort still open.
+- [x] **Browser notifications** (`953378d`): Notification API alerts for new
+      feed items (sensor alerts + watch hits), opt-in via the bell dropdown,
+      click focuses tab + follows link. True Web Push (closed tab) deferred —
+      needs VAPID + a push service.
 
-## Phase 3 — fleet ops (needs groups)
+## Phase 3 — fleet ops ✅ landed
 
-- [ ] **Host groups/tags entity**: promote `folder`+`tags` into a first-class
-      `groups` table (name, members, shared flag); bulk-select UI on the
-      Sessions page; keep folders as the visual grouping, groups as the
-      action target.
-- [ ] **Bulk ops**: power on/off/reset, connect, run playbook, WoL across a
-      group selection — sequential with per-host result reporting (reuse
-      the playbook-run history table for the audit trail).
-- [ ] **Bulk BMC dashboard actions**: fleet power, mount/unmount, exclude —
-      the overview endpoint already returns everything needed.
+- [x] **Host groups** (`480792a`): `host_groups` + `host_group_members`,
+      CRUD under `/api/bmc/groups`, BMC-scoped. Dashboard group picker fills
+      the bulk selection; "save as group" from any selection.
+- [x] **Bulk BMC dashboard actions** (`480792a`): `POST /api/bmc/bulk` —
+      power on/off/cycle/reset, BMC reset, exclude/include monitoring across
+      selected hosts at concurrency 4 with per-host results. Checkbox
+      selection + action bar on the dashboard.
+- [ ] **Bulk ops beyond BMC**: power/connect/playbook/WoL across SSH host
+      groups — needs the groups entity generalized off `protocol='bmc'`
+      and a sessions-page group selector.
 
 ## Phase 4 — sharing + polish
 
 - [ ] **KVM console share links**: read-only (maybe control) share for BMC
       consoles — `shares` table + ws plumbing exist for ssh sessions; kvm
-      sessions need the same viewer path (`session.ws` fan-out is
-      ssh-specific today). Decide deliberately whether BMC consoles should
+      sessions need frame fan-out (`session.ws` is single-consumer today)
+      plus a viewer client. Decide deliberately whether BMC consoles should
       be shareable at all — they're the most sensitive surface.
-- [ ] **API token scope docs**: tokens can't touch websockets — document in
-      Settings/API page; optionally add a `kvm` scope if a use case appears.
-- [ ] **Login rate limit**: also key on username (shared-NAT lockout).
-- [ ] **In-app notification center**: persist watch hits / alerts / scheduled
-      playbook results into a `notifications` table with an unread badge —
-      today they only exist as transient toasts.
+- [x] **API token scope docs**: README "API tokens" section — scopes, the
+      route allowlist, WS exclusion, expiry. (`slo_` tokens were already
+      enforced via `TOKEN_SCOPE_ROUTES`; they were just undocumented.)
+- [x] **Login rate limit**: `/login` now also keys on username (8/15min)
+      behind the per-IP 30/15min — credential stuffing across rotating IPs
+      stalls per-account.
+- [x] **In-app notification center** (`8fe3ffa`): `notifications` table +
+      bell dropdown — unread badge, mark read/all, delete, deep links.
+      Watch hits feed it too (5-min per-label cooldown).
 
 ## Deferred / maybe
 
@@ -63,3 +70,5 @@ and what "done" looks like. Check items off as they land.
 - Mobile-optimized KVM view.
 - BMC credential vault integration (some orgs keep BMC creds in a separate
   PAM — an import adapter could map them onto `credentials`).
+- Web Push (VAPID) for notifications when the browser is closed.
+- Sensor history rollups (hourly/daily) + fleet "worst offenders" sort.
