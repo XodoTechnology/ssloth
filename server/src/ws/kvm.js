@@ -10,12 +10,16 @@
 //   {type:'key', usage, down, repeat?}
 //   {type:'pointer', x, y, fw, fh, buttons, wheel}
 //   {type:'char', c}   {type:'releaseAll'}   {type:'cad'}
+//   {type:'takeoverAnswer', answer}          — 'full'|'view'|'deny' to a share prompt
 //   {type:'close'}
 //
 // Server → client:
 //   binary frames (KVMF wire format — see web/src/lib/kvm/frames.js)
 //   {type:'status', state:'connecting'|'ready'|'error'|'closed', message}
 //   {type:'ready', sessionId, title, family}
+//   {type:'takeover', pending}               — someone wants this console; answer it
+//   {type:'takeover_clear'}                  — the request ended (answered/lapsed)
+//   {type:'takeover_lapsed', user, answered} — it timed out before an answer
 
 const fs = require('fs');
 const path = require('path');
@@ -46,6 +50,7 @@ setInterval(() => {
 function killSession(s) {
   if (!s) return;
   sessions.delete(s.id);
+  if (s.takeoverPoll) clearInterval(s.takeoverPoll);
   try {
     s.bmc.close();
   } catch {}
@@ -57,6 +62,35 @@ function killSession(s) {
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// Push the console-sharing state to whichever socket is watching: a pending
+// request goes out once per distinct prompt, its end as takeover_clear, and a
+// request that timed out unanswered as takeover_lapsed (the core reports each
+// lapsed request exactly once).
+function pushTakeover(s) {
+  const ws = s.ws;
+  if (!ws || ws.readyState !== 1) return;
+  let st;
+  try {
+    st = s.bmc.takeoverState();
+  } catch {
+    return; // console not adopted yet
+  }
+  if (!st) return;
+  if (st.pending) {
+    const key = `${st.pending.user}${st.pending.question}`;
+    if (s.takeoverKey !== key) {
+      s.takeoverKey = key;
+      send(ws, { type: 'takeover', pending: st.pending });
+    }
+  } else if (s.takeoverKey) {
+    s.takeoverKey = null;
+    send(ws, { type: 'takeover_clear' });
+  }
+  if (st.lapsed) {
+    send(ws, { type: 'takeover_lapsed', user: st.lapsed.user, answered: st.lapsed.answered });
+  }
 }
 
 // An in-flight BMC operation's stage, for the client's progress list:
@@ -96,6 +130,7 @@ function handleKvmWs(ws, req, user) {
           s.ws = ws;
           s.detachedAt = null;
           send(ws, { type: 'ready', sessionId: s.id, title: s.label, family: s.family, reattached: true });
+          pushTakeover(s); // a prompt may already be pending
           audit(user, 'kvm.reattach', s.label, req);
           break;
         }
@@ -114,6 +149,18 @@ function handleKvmWs(ws, req, user) {
         case 'cad':
           sendInput(() => session.bmc.sendCad());
           break;
+        case 'takeoverAnswer': {
+          const ans = String(msg.answer || '');
+          if (session) {
+            try {
+              const ok = session.bmc.takeoverAnswer(ans);
+              audit(user, 'kvm.takeover', `${session.label} → ${ans}${ok ? '' : ' (request had ended)'}`, req);
+            } catch (e) {
+              send(ws, { type: 'status', state: 'notice', message: e.message });
+            }
+          }
+          break;
+        }
         case 'mount': {
           // spec: server-side path or http(s) URL — async; stages land as
           // {type:'op'} + notices from the core's own sink
@@ -255,6 +302,10 @@ function handleKvmWs(ws, req, user) {
     };
     sessions.set(id, rec);
     session = rec;
+    // Console-sharing prompts ("X wants this console") ride this poll — the
+    // core's slot only lives in Rust, so JS asks for its state.
+    rec.takeoverPoll = setInterval(() => pushTakeover(rec), 800);
+    rec.takeoverPoll.unref();
 
     function onEvent(line) {
       const s = sessions.get(id);
@@ -265,6 +316,7 @@ function handleKvmWs(ws, req, user) {
         const [title, family] = body.split(':');
         s.family = family;
         send(out, { type: 'ready', sessionId: id, title, family });
+        pushTakeover(s);
         audit(user, 'kvm.connect', spec.label, req);
       } else if (kind === 'progress') {
         send(out, { type: 'status', state: 'connecting', message: body });

@@ -401,6 +401,66 @@ pub fn connect(host: &str, cookie: &str, launch: &crate::families::spx::Launch,
     Err(ioerr("the console never answered the validate packet"))
 }
 
+/// Grab one settled framebuffer without a console session of our own — the
+/// `preview` path: connect, ask for the full screen, decode until the picture
+/// stops changing, then close. Costs a console slot for a few seconds.
+pub fn snapshot(host: &str, cookie: &str, launch: &crate::families::spx::Launch,
+                budget: Duration) -> std::io::Result<crate::image::Image> {
+    /// How long the stream must go quiet before the screen counts as drawn.
+    const SETTLED: Duration = Duration::from_millis(400);
+    /// What counts as a substantial redraw — a blinking cursor is noise.
+    const SUBSTANTIAL: usize = 64;
+
+    let mut con = connect(host, cookie, launch, &|_| {})?;
+    con.sock.set_poll_timeout(Duration::from_millis(50)).ok();
+    let _ = con.request_full_screen();
+    let mut asm = VideoAssembler::default();
+    let mut fb = crate::ast2100::Decoder::new(1024, 768);
+
+    let start = std::time::Instant::now();
+    let mut last_frame = start;
+    let mut last_big: Option<std::time::Instant> = None;
+    while start.elapsed() < budget {
+        if fb.frames > 0
+            && (last_big.is_some_and(|t| t.elapsed() > SETTLED) || last_frame.elapsed() > SETTLED)
+        {
+            break;
+        }
+        let f = match con.next_frame() {
+            Ok(Some(f)) => f,
+            Ok(None) => continue,
+            Err(_) => break,
+        };
+        last_frame = std::time::Instant::now();
+        match f.ty {
+            CMD_VIDEO_PACKETS => {
+                if f.payload.len() >= SUBSTANTIAL {
+                    last_big = Some(last_frame);
+                }
+                if let Some((h, data)) = asm.push(&f.payload) {
+                    fb.decode_ami_frame(h.width, h.height, h.mode420,
+                                        h.jpeg_table, h.advance_table, h.yuv_mapping, &data);
+                }
+            }
+            CMD_KEEP_ALIVE_PKT => { let _ = con.keep_alive(); }
+            CMD_STOP_SESSION_IMMEDIATE => break,
+            _ => {}
+        }
+    }
+    // Synchronous, like `Console::close`: an abandoned socket reads as a live
+    // session on the BMC until its own timeout.
+    con.close();
+
+    if fb.frames == 0 {
+        return Err(ioerr("the console sent no video (is the server powered off?)"));
+    }
+    Ok(crate::image::Image {
+        width: fb.width,
+        height: fb.height,
+        rgb: std::mem::take(&mut fb.framebuffer),
+    })
+}
+
 // ---------- video ----------
 
 /// Reassembles `VIDEO_PACKETS` fragments into whole AST frames.

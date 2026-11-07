@@ -22,6 +22,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   const [mountUrl, setMountUrl] = useState('');
   const [op, setOp] = useState(null); // {name, stages:[{msg,done}], done, err}
   const [stages, setStages] = useState([]); // connect-time stage lines
+  const [takeover, setTakeover] = useState(null); // {user, question, answers:[{answer,label}]}
   const fileRef = useRef(null);
   const opTimerRef = useRef(null);
   const toast = useStore((s) => s.toast);
@@ -139,11 +140,23 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
           } else if (msg.state === 'error') {
             sessionRef.current = null;
             setPaneState({ status: 'error', sessionId: null });
+            setTakeover(null);
             clearCanvas();
           } else if (msg.state === 'closed') {
             setPaneState({ status: 'closed' });
+            setTakeover(null);
             clearCanvas();
           }
+          break;
+        case 'takeover':
+          setTakeover(msg.pending || null);
+          break;
+        case 'takeover_clear':
+          setTakeover(null);
+          break;
+        case 'takeover_lapsed':
+          setTakeover(null);
+          toast(`${msg.user || 'Another user'}'s console request ${msg.answered ? `was answered (${msg.answered})` : 'timed out'}`, 'info');
           break;
       }
     };
@@ -310,6 +323,27 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
             <div className="flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setPasteOpen(false)}>Cancel</button>
               <button className="btn-primary" disabled={!pasteText} onClick={pasteKeys}>Type it</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {takeover && (
+        <Modal title="Console access request" onClose={() => {}}>
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-300">{takeover.question}</p>
+            {takeover.addr && <p className="text-xs text-zinc-500 font-mono">from {takeover.addr}</p>}
+            <p className="text-xs text-zinc-500">The BMC withdraws unanswered requests after ~30 seconds.</p>
+            <div className="flex flex-wrap justify-end gap-2">
+              {(takeover.answers || []).map((a) => (
+                <button
+                  key={a.answer}
+                  className={a.answer === 'deny' ? 'btn-ghost' : 'btn-primary'}
+                  onClick={() => { sendJson({ type: 'takeoverAnswer', answer: a.answer }); setTakeover(null); }}
+                >
+                  {a.label}
+                </button>
+              ))}
             </div>
           </div>
         </Modal>

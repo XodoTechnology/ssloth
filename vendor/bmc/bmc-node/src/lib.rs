@@ -14,13 +14,14 @@ use bmc_core::input::encoder::{Encode, FamilyEncoder};
 use bmc_core::input::Event as InputEvent;
 use bmc_core::jobs::Jobs;
 use bmc_core::routes::{Auth, Kind, Route};
+use bmc_core::families::quanta::kvm::ShareAnswer;
 use bmc_core::{event_log, families, ipmi, media, net, power, vmedia};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::Sender, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 /// One hop of a bastion chain, mapped from a ssloth jump host record.
 #[napi(object)]
@@ -49,6 +50,58 @@ pub struct SessionSpec {
     pub pass: String,
     /// Take the console from another user (iLO asks them).
     pub seize: Option<bool>,
+}
+
+fn share_answer_name(a: ShareAnswer) -> &'static str {
+    match a {
+        ShareAnswer::Full => "full",
+        ShareAnswer::ViewOnly => "view",
+        ShareAnswer::Deny => "deny",
+    }
+}
+
+fn share_answer_from(s: &str) -> Option<ShareAnswer> {
+    match s {
+        "full" => Some(ShareAnswer::Full),
+        "view" => Some(ShareAnswer::ViewOnly),
+        "deny" => Some(ShareAnswer::Deny),
+        _ => None,
+    }
+}
+
+#[napi(object)]
+pub struct TakeoverChoice {
+    /// "full" | "view" | "deny" — what `takeover_answer` takes back.
+    pub answer: String,
+    /// The vendor's button label ("Give full access", "Let them view", …).
+    pub label: String,
+}
+
+#[napi(object)]
+pub struct TakeoverPending {
+    pub user: String,
+    pub addr: String,
+    pub question: String,
+    pub answers: Vec<TakeoverChoice>,
+    /// Milliseconds left to answer; the BMC withdraws after ~30 s.
+    pub left_ms: u32,
+    /// What the vendor client answers when nobody does (iLO hands over;
+    /// AMI leaves it to the BMC → null).
+    pub on_timeout: Option<String>,
+}
+
+#[napi(object)]
+pub struct TakeoverLapsed {
+    pub user: String,
+    /// The answer given on the user's behalf, if the vendor's rule gives one.
+    pub answered: Option<String>,
+}
+
+#[napi(object)]
+pub struct TakeoverState {
+    pub pending: Option<TakeoverPending>,
+    /// A request that ended unanswered since the last poll — reported once.
+    pub lapsed: Option<TakeoverLapsed>,
 }
 
 /// Install a resolved bastion chain for one BMC address. Call before open.
@@ -282,6 +335,45 @@ impl BmcSession {
     #[napi]
     pub fn send_cad(&self) -> Result<()> {
         self.encode_send(InputEvent::CtrlAltDel)
+    }
+
+    /// The console-sharing request waiting for an answer (someone else wants
+    /// this console), plus any request that lapsed since the last call.
+    /// Undefined until the console is ready; JS polls this.
+    #[napi]
+    pub fn takeover_state(&self) -> Option<TakeoverState> {
+        let h = self.handle.lock().unwrap();
+        let h = h.as_ref()?;
+        let slot = &h.console.takeover;
+        let pending = slot.pending().map(|p| TakeoverPending {
+            user: p.user,
+            addr: p.addr,
+            question: p.question,
+            answers: p.answers
+                .into_iter()
+                .map(|(a, label)| TakeoverChoice {
+                    answer: share_answer_name(a).into(),
+                    label: label.into(),
+                })
+                .collect(),
+            left_ms: p.left.as_millis().min(u32::MAX as u128) as u32,
+            on_timeout: p.on_timeout.map(|a| share_answer_name(a).into()),
+        });
+        let lapsed = slot.take_lapsed().map(|l| TakeoverLapsed {
+            user: l.user,
+            answered: l.answered.map(|a| share_answer_name(a).into()),
+        });
+        Some(TakeoverState { pending, lapsed })
+    }
+
+    /// Answer the pending takeover request; false when it already ended.
+    #[napi]
+    pub fn takeover_answer(&self, answer: String) -> Result<bool> {
+        let ans = share_answer_from(answer.trim())
+            .ok_or_else(|| Error::from_reason("answer must be full, view or deny"))?;
+        let h = self.handle.lock().unwrap();
+        let h = h.as_ref().ok_or_else(|| Error::from_reason("console not ready"))?;
+        Ok(h.console.takeover.answer(ans).is_some())
     }
 
     /// End the console; releases the BMC's session/media handles.
