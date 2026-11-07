@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useStore } from '../store';
-import { Activity, EyeOff, Eye } from 'lucide-react';
+import { Activity, EyeOff, Eye, BellRing, Plus, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { sensorTier } from '../lib/sensor-tier';
 
@@ -119,6 +119,88 @@ export default function BmcDashboard() {
         })}
       </div>
       {detail && <SensorDetail host={detail} onClose={() => setDetail(null)} />}
+      <AlertRules hosts={data.hosts} />
+    </div>
+  );
+}
+
+// Sensor alert rules: notify (bell + webhook + audit) when a sensor's status
+// tier crosses the floor — on the transition, not every poll.
+function AlertRules({ hosts }) {
+  const { toast } = useStore();
+  const [rules, setRules] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ host_id: '', sensor: '', min_tier: 'bad' });
+
+  const load = () => api('/api/notifications/rules').then((d) => setRules(d.rules || [])).catch(() => {});
+  useEffect(load, []);
+
+  const add = async () => {
+    try {
+      await api('/api/notifications/rules', {
+        method: 'POST',
+        body: { host_id: form.host_id || null, sensor: form.sensor, min_tier: form.min_tier },
+      });
+      setForm({ host_id: '', sensor: '', min_tier: 'bad' });
+      setOpen(false);
+      load();
+      toast('alert rule added', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  const toggle = async (r) => {
+    await api(`/api/notifications/rules/${r.id}`, { method: 'PUT', body: { enabled: !r.enabled } }).catch(() => {});
+    load();
+  };
+  const del = async (r) => {
+    await api(`/api/notifications/rules/${r.id}`, { method: 'DELETE' }).catch(() => {});
+    load();
+  };
+
+  const hostName = (id) => (id == null ? 'all BMC hosts' : (hosts.find((h) => h.id === id)?.name || hosts.find((h) => h.id === id)?.hostname || `#${id}`));
+
+  return (
+    <div className="rounded-lg border border-ink-700 bg-ink-900">
+      <button className="flex w-full items-center gap-2 px-4 py-3 text-left" onClick={() => setOpen((o) => !o)}>
+        <BellRing size={14} className="text-amber-300" />
+        <span className="text-sm font-medium text-zinc-200">Sensor alerts</span>
+        <span className="text-xs text-zinc-500">{rules.filter((r) => r.enabled).length} active</span>
+        <span className="ml-auto text-zinc-500">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-ink-800 px-4 py-3 space-y-3">
+          {rules.length === 0 && <p className="text-xs text-zinc-500">no rules — alerts fire on status-tier crossings (warn/bad) into the bell, webhooks and audit log</p>}
+          {rules.map((r) => (
+            <div key={r.id} className="flex items-center gap-2 text-xs">
+              <button
+                className={`h-2 w-2 rounded-full ${r.enabled ? 'bg-emerald-400' : 'bg-zinc-600'}`}
+                title={r.enabled ? 'enabled — click to pause' : 'paused — click to enable'}
+                onClick={() => toggle(r)}
+              />
+              <span className="text-zinc-300">{r.min_tier === 'warn' ? 'warn+' : 'bad only'}</span>
+              <span className="text-zinc-500">on</span>
+              <span className="text-zinc-200 font-mono">{r.sensor || '*'}</span>
+              <span className="text-zinc-500">@ {hostName(r.host_id)}</span>
+              <button className="ml-auto text-zinc-600 hover:text-rose-400" onClick={() => del(r)}><Trash2 size={12} /></button>
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <select className="input !w-auto text-xs" value={form.host_id} onChange={(e) => setForm({ ...form, host_id: e.target.value })}>
+              <option value="">all hosts</option>
+              {hosts.map((h) => <option key={h.id} value={h.id}>{h.name || h.hostname}</option>)}
+            </select>
+            <input className="input !w-40 text-xs font-mono" placeholder="sensor name contains…" value={form.sensor} onChange={(e) => setForm({ ...form, sensor: e.target.value })} />
+            <select className="input !w-auto text-xs" value={form.min_tier} onChange={(e) => setForm({ ...form, min_tier: e.target.value })}>
+              <option value="bad">bad only</option>
+              <option value="warn">warn or worse</option>
+            </select>
+            <button className="btn-primary !px-2 !py-1 text-xs flex items-center gap-1" onClick={add} disabled={!form.sensor && !form.host_id}>
+              <Plus size={12} /> add rule
+            </button>
+            <span className="text-[10px] text-zinc-600">empty sensor = every sensor; needs a name or a host</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

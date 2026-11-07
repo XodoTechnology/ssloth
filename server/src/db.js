@@ -312,6 +312,56 @@ CREATE TABLE IF NOT EXISTS workspaces (
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
+
+-- Sensor alert rules: fire when a sensor's status tier crosses the rule's
+-- floor. host_id NULL = every BMC host the user owns.
+CREATE TABLE IF NOT EXISTS sensor_alert_rules (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  host_id    INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  sensor     TEXT NOT NULL DEFAULT '',
+  min_tier   TEXT NOT NULL DEFAULT 'bad' CHECK (min_tier IN ('warn','bad')),
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_sensor_rules_user ON sensor_alert_rules(user_id);
+
+-- Last tier seen per (rule, host, sensor) — transition detection lives here,
+-- so an alert fires on the crossing, not on every poll while it stays bad.
+CREATE TABLE IF NOT EXISTS sensor_alert_state (
+  rule_id    INTEGER NOT NULL,
+  host_id    INTEGER NOT NULL,
+  sensor     TEXT NOT NULL,
+  tier       TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (rule_id, host_id, sensor)
+);
+
+-- In-app notifications: the bell/toast feed and, later, the push centre.
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  link       TEXT,
+  read       INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read, created_at);
+
+-- Persisted sensor readings, one row per entry per sample. The 5-minute
+-- sweep keeps ~20k rows/day/host; a retention sweep trims the tail.
+CREATE TABLE IF NOT EXISTS sensor_history (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  host_id  INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  t        INTEGER NOT NULL,
+  name     TEXT NOT NULL,
+  reading  TEXT NOT NULL DEFAULT '',
+  units    TEXT NOT NULL DEFAULT '',
+  status   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sensor_history_host ON sensor_history(host_id, t);
 `);
 
 function audit(user, action, detail, req) {

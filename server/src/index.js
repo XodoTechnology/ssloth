@@ -36,6 +36,7 @@ const playbookRoutes = require('./routes/playbooks');
 const backupRoutes = require('./routes/backup');
 const webhookRoutes = require('./routes/webhooks');
 const tokenRoutes = require('./routes/tokens');
+const notificationRoutes = require('./routes/notifications');
 const { router: shareRoutes, publicRouter: sharePublicRoutes } = require('./routes/shares');
 const { handleTelnetWs } = require('./ws/telnet');
 const { handleKvmWs } = require('./ws/kvm');
@@ -115,6 +116,7 @@ app.use('/api/playbooks', requireAuth, requireWrite, playbookRoutes);
 app.use('/api/vault', requireAuth, requireWrite, backupRoutes);
 app.use('/api/webhooks', requireAuth, requireWrite, webhookRoutes);
 app.use('/api/tokens', requireAuth, requireWrite, tokenRoutes);
+app.use('/api/notifications', requireAuth, requireWrite, notificationRoutes);
 app.use('/api/workspaces', requireAuth, requireWrite, require('./routes/workspaces'));
 app.use('/api/admin', requireAuth, requireWrite, adminRoutes);
 // Public read-only metadata for share links (token in path is the credential).

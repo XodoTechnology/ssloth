@@ -400,6 +400,12 @@ function sessionOutput(session, chunk) {
       if (session.ws) {
         try { session.ws.send(JSON.stringify({ type: 'watch_hit', label: w.label })); } catch {}
       }
+      // The bell/webhook feed too — deduped per label so a chatty pattern
+      // can't flood it (the ws hit above still fires every time).
+      try {
+        const hostLabel = session.label || session.hostId;
+        require('../notifications').watchHit(session.userId, hostLabel, w.label);
+      } catch {}
     }
   } catch {}
   // Only consumers count as activity — a detached `top` session must still

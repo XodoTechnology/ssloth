@@ -18,6 +18,7 @@ import { sensorTier } from '../lib/sensor-tier';
 import { useStore } from '../store';
 import CommandPalette from './CommandPalette';
 import TransfersTray from './TransfersTray';
+import NotificationBell from './NotificationBell';
 
 const NAV = [
   { to: '/', label: 'Sessions', icon: Terminal, end: true },
@@ -138,6 +139,7 @@ export default function Layout() {
             </div>
           </div>
           <div className="flex items-center">
+            <NotificationBell />
             <button
               className="btn-ghost !px-2"
               title="Lock screen"
