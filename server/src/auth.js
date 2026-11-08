@@ -3,16 +3,20 @@
 const crypto = require('crypto');
 const { db, audit } = require('./db');
 const { sha256, sha256B64, randomToken } = require('./crypto');
-const { SESSION_TTL_MS, SECURE_COOKIES, DESKTOP } = require('./config');
+const { SESSION_TTL_MS, SESSION_IDLE_MS, SECURE_COOKIES, DESKTOP } = require('./config');
+const { lanActive, isLoopbackClient, hostHeaderAllowed } = require('./netcfg');
 
 const COOKIE_NAME = 'ssloth_session';
 
 const stmtFindSession = db.prepare(`
-  SELECT s.id AS session_id, s.expires_at, u.id, u.username, u.is_admin, u.totp_enabled, u.role
+  SELECT s.id AS session_id, s.expires_at, s.last_seen_at, u.id, u.username, u.is_admin, u.totp_enabled, u.role, u.lan_allowed
   FROM sessions s JOIN users u ON u.id = s.user_id
   WHERE s.token_hash = ?
 `);
-const stmtTouchSession = db.prepare('UPDATE sessions SET expires_at = ? WHERE id = ?');
+// One write covers both clocks: expires_at slides on activity (the old
+// half-TTL check was just a write throttle) and last_seen_at feeds the
+// idle timeout. Throttled to one write per minute per session.
+const stmtTouchSession = db.prepare('UPDATE sessions SET expires_at = ?, last_seen_at = ? WHERE id = ?');
 const stmtDeleteSession = db.prepare('DELETE FROM sessions WHERE token_hash = ?');
 const stmtInsertSession = db.prepare(
   'INSERT INTO sessions (token_hash, user_id, ip, ua, expires_at) VALUES (?, ?, ?, ?, ?)'
@@ -49,15 +53,31 @@ function resolveToken(token) {
   if (!token || typeof token !== 'string') return null;
   const row = stmtFindSession.get(sha256(token));
   if (!row) return null;
-  if (row.expires_at < Date.now()) {
+  const now = Date.now();
+  if (row.expires_at < now) {
     stmtDeleteSession.run(sha256(token));
     return null;
   }
-  // Sliding renewal: extend when less than half the TTL remains.
-  if (row.expires_at - Date.now() < SESSION_TTL_MS / 2) {
-    stmtTouchSession.run(Date.now() + SESSION_TTL_MS, row.session_id);
+  // Idle timeout: rows predating last_seen_at get stamped on first use
+  // (a grace window), then must see activity within SESSION_IDLE_MS.
+  if (SESSION_IDLE_MS > 0 && row.last_seen_at != null && now - row.last_seen_at > SESSION_IDLE_MS) {
+    stmtDeleteSession.run(sha256(token));
+    audit(null, 'session.idle_expired', `session ${row.session_id} idle > ${Math.round(SESSION_IDLE_MS / 3600000)}h`, null);
+    return null;
   }
-  return { id: row.id, username: row.username, is_admin: !!row.is_admin || row.role === 'admin', role: row.role || (row.is_admin ? 'admin' : 'user'), totp_enabled: !!row.totp_enabled };
+  if (row.last_seen_at == null || now - row.last_seen_at > 60_000 || row.expires_at - now < SESSION_TTL_MS / 2) {
+    stmtTouchSession.run(now + SESSION_TTL_MS, now, row.session_id);
+  }
+  return { id: row.id, username: row.username, is_admin: !!row.is_admin || row.role === 'admin', role: row.role || (row.is_admin ? 'admin' : 'user'), totp_enabled: !!row.totp_enabled, session_id: row.session_id, lan_allowed: row.lan_allowed !== 0 };
+}
+
+// Keepalive for long-lived WebSockets: an open console counts as activity,
+// otherwise a user watching a running job would be logged out mid-session.
+function touchSession(sessionId) {
+  try {
+    const now = Date.now();
+    stmtTouchSession.run(now + SESSION_TTL_MS, now, sessionId);
+  } catch {}
 }
 
 // Bearer API tokens: 'Authorization: Bearer slo_...'. Token requests are
@@ -74,13 +94,13 @@ function resolveApiToken(req) {
   const m = h.match(/^Bearer\s+(slo_[A-Za-z0-9_-]{20,128})$/);
   if (!m) return null;
   const row = db
-    .prepare('SELECT t.id AS tok, t.scopes, t.expires_at, u.id, u.username, u.is_admin, u.role, u.totp_enabled FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?')
+    .prepare('SELECT t.id AS tok, t.scopes, t.expires_at, u.id, u.username, u.is_admin, u.role, u.totp_enabled, u.lan_allowed FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?')
     .get(sha256B64(m[1]));
   if (!row) return null;
   if (row.expires_at && row.expires_at * 1000 < Date.now()) return null;
   db.prepare('UPDATE api_tokens SET last_used = unixepoch() WHERE id = ?').run(row.tok);
   const scopes = new Set(row.scopes.split(',').filter(Boolean));
-  const user = { id: row.id, username: row.username, is_admin: !!row.is_admin || row.role === 'admin', role: row.role || 'user', totp_enabled: !!row.totp_enabled };
+  const user = { id: row.id, username: row.username, is_admin: !!row.is_admin || row.role === 'admin', role: row.role || 'user', totp_enabled: !!row.totp_enabled, lan_allowed: row.lan_allowed !== 0 };
   return { user, scopes };
 }
 
@@ -91,17 +111,26 @@ function routeKey(req) {
 
 // Desktop mode: single-user loopback app — auto-resolve the account when no
 // unlock PIN is configured. With a PIN, returns null so the unlock screen shows.
-function desktopUser() {
+// Loopback clients only: on a LAN-exposed desktop server a remote client must
+// always go through real authentication.
+function desktopUser(req) {
   if (!DESKTOP) return null;
-  const users = db.prepare('SELECT id, username, is_admin, role, totp_enabled, pin_hash FROM users ORDER BY id').all();
+  if (req && !isLoopbackClient(req)) return null;
+  const users = db.prepare('SELECT id, username, is_admin, role, totp_enabled, pin_hash, lan_allowed FROM users ORDER BY id').all();
   if (users.length !== 1) return null;
   if (users[0].pin_hash) return null;
   const u = users[0];
-  return { id: u.id, username: u.username, is_admin: !!u.is_admin || u.role === 'admin', role: u.role || (u.is_admin ? 'admin' : 'user'), totp_enabled: !!u.totp_enabled };
+  return { id: u.id, username: u.username, is_admin: !!u.is_admin || u.role === 'admin', role: u.role || (u.is_admin ? 'admin' : 'user'), totp_enabled: !!u.totp_enabled, lan_allowed: u.lan_allowed !== 0 };
 }
 
 function resolveCookie(req) {
-  return resolveToken(req.cookies?.[COOKIE_NAME]) || desktopUser();
+  return resolveToken(req.cookies?.[COOKIE_NAME]) || desktopUser(req);
+}
+
+// Accounts flagged lan_allowed=0 can't be used from non-loopback clients
+// while desktop LAN mode is on (loopback — the local app — is unaffected).
+function lanDenied(req, user) {
+  return user.lan_allowed === false && lanActive() && !isLoopbackClient(req);
 }
 
 function requireAuth(req, res, next) {
@@ -114,12 +143,14 @@ function requireAuth(req, res, next) {
       (TOKEN_SCOPE_ROUTES[s] || []).some((re) => re.test(key))
     );
     if (!allowed) return res.status(403).json({ error: 'token scope does not allow this route' });
+    if (lanDenied(req, t.user)) return res.status(403).json({ error: 'this account cannot be used from the network' });
     req.user = t.user;
     req.tokenScopes = t.scopes;
     return next();
   }
   const user = resolveCookie(req);
   if (!user) return res.status(401).json({ error: 'authentication required' });
+  if (lanDenied(req, user)) return res.status(403).json({ error: 'this account cannot be used from the network' });
   req.user = user;
   next();
 }
@@ -178,7 +209,9 @@ function isLoopbackHostHeader(hostHeader) {
 }
 function checkLoopbackHost(req, res, next) {
   if (!DESKTOP) return next();
-  if (!isLoopbackHostHeader(req.headers.host)) {
+  // hostHeaderAllowed additionally permits IP-literal hosts when desktop
+  // LAN mode is on — DNS names stay rejected either way (rebinding guard).
+  if (!hostHeaderAllowed(req.headers.host)) {
     return res.status(403).json({ error: 'invalid host header' });
   }
   next();
@@ -189,7 +222,7 @@ function checkLoopbackHost(req, res, next) {
 function checkWsOrigin(req) {
   const origin = req.headers.origin;
   if (!origin) return false;
-  if (DESKTOP && !isLoopbackHostHeader(req.headers.host)) return false;
+  if (DESKTOP && !hostHeaderAllowed(req.headers.host)) return false;
   try {
     return new URL(origin).host === req.headers.host;
   } catch {
@@ -206,6 +239,7 @@ module.exports = {
   createSession,
   destroySession,
   resolveToken,
+  touchSession,
   resolveCookie,
   desktopUser,
   requireAuth,
@@ -215,5 +249,6 @@ module.exports = {
   checkWsOrigin,
   checkLoopbackHost,
   isLoopbackHostHeader,
+  lanDenied,
   auditReq,
 };

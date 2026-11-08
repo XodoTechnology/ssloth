@@ -174,9 +174,11 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   // same framebuffer; the token is the credential and expires on its own.
   async function shareConsole() {
     try {
+      const pw = prompt('optional password for the share link (blank = anyone with the link)');
+      if (pw === null) return;
       const r = await api('/api/shares', {
         method: 'POST',
-        body: { session_id: sessionRef.current, kind: 'kvm', mode: 'view', ttl_minutes: 60 },
+        body: { session_id: sessionRef.current, kind: 'kvm', mode: 'view', ttl_minutes: 60, password: pw || undefined },
       });
       const url = `${location.origin}${r.share.url}`;
       try { await navigator.clipboard.writeText(url); } catch {}
@@ -301,8 +303,8 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
         <Modal title="Mount virtual media" onClose={() => setMountOpen(false)}>
           <div className="space-y-3">
             <div>
-              <label className="label">Image URL (http/https)</label>
-              <input className="input w-full font-mono text-xs" value={mountUrl} onChange={(e) => setMountUrl(e.target.value)} placeholder="http://host/win11.iso — the BMC fetches it where it can" />
+              <label className="label">Image URL (public http/https)</label>
+              <input className="input w-full font-mono text-xs" value={mountUrl} onChange={(e) => setMountUrl(e.target.value)} placeholder="https://host/win11.iso — private/LAN addresses are refused" />
             </div>
             <div className="flex items-center gap-2">
               <input ref={fileRef} type="file" accept=".iso,.img" className="text-xs text-zinc-400" />

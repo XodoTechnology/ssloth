@@ -8,8 +8,9 @@ const dgram = require('dgram');
 const { db } = require('../db');
 const { encryptSecret } = require('../crypto');
 const { auditReq } = require('../auth');
-const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey, resolveConnectSpec } = require('../ssh/manager');
-const { bmc, bmcError, applyRoutes } = require('../bmc');
+const { listHostKeys, removeHostKey, trustHostKey, getStoredHostKey, resolveConnectSpec, sessions } = require('../ssh/manager');
+const { bmc, bmcError, applyRoutes, releaseRoute } = require('../bmc');
+const { DATA_DIR } = require('../config');
 const sensorsPoll = require('../sensors-poll');
 const { scanHostKey } = require('../ssh/keyscan');
 const { getHealthHistory, latestHealth } = require('../health');
@@ -86,6 +87,9 @@ function cleanHostInput(body, { partial = false } = {}) {
   }
   if (!partial || body.sensor_exclude !== undefined) {
     out.sensor_exclude = body.sensor_exclude ? 1 : 0;
+  }
+  if (!partial || body.durable !== undefined) {
+    out.durable = body.durable ? 1 : 0;
   }
   // Secret fields are only updated when explicitly provided.
   if (body.password !== undefined) {
@@ -337,6 +341,12 @@ router.post('/hostkeys/scan', async (req, res) => {
         if (trust) {
           trustHostKey(req.user.id, t.hostname, t.port, r.keyB64, r.algorithm);
           entry.trusted = true;
+          // The stored key now matches what we just scanned — clear any
+          // 'changed'/'untrusted' flag the monitor left, for owned hosts only
+          // (a shared host's status column belongs to its owner).
+          db.prepare(
+            "UPDATE hosts SET hostkey_status = 'ok', hostkey_checked_at = unixepoch() WHERE user_id = ? AND hostname = ? AND port = ?"
+          ).run(req.user.id, t.hostname, t.port);
         }
         return entry;
       })
@@ -380,10 +390,19 @@ router.get('/:id/health', (req, res) => {
 // addon's route table before the call. These are blocking IPMI/HTTP calls
 // inside the addon — napi runs them off the event loop, we await them here.
 
-function bmcSpec(req) {
+let bmcHolderSeq = 0;
+// One-shot BMC calls hold their bastion route only for the call's duration;
+// the holder id lets the registry refuse a conflicting chain for the same
+// BMC address instead of silently misrouting another user's traffic.
+function bmcSpec(req, holderId) {
   const spec = resolveConnectSpec(req.user.id, { hostId: parseInt(req.params.id, 10) });
-  applyRoutes(resolveConnectSpec, req.user.id, spec);
+  applyRoutes(resolveConnectSpec, req.user.id, spec, { id: holderId });
   return { host: spec.hostname, user: spec.username || '', pass: spec.password || '' };
+}
+function bmcSpecDone(spec, holderId) {
+  if (spec) {
+    try { releaseRoute(spec.host, holderId); } catch {}
+  }
 }
 
 const BMC_ACTIONS = new Set(['on', 'off', 'reset', 'cycle', 'soft']);
@@ -392,8 +411,10 @@ router.post('/:id/power', async (req, res) => {
   if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
   const { action, family } = req.body || {};
   if (!BMC_ACTIONS.has(action)) return res.status(400).json({ error: 'action must be on|off|reset|cycle|soft' });
+  const hid = `api-${req.user.id}-${++bmcHolderSeq}`;
+  let spec = null;
   try {
-    const spec = bmcSpec(req);
+    spec = bmcSpec(req, hid);
     const message =
       action === 'cycle'
         ? await bmc.ipmiPower(spec, action)
@@ -402,43 +423,61 @@ router.post('/:id/power', async (req, res) => {
     res.json({ ok: true, message });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  } finally {
+    bmcSpecDone(spec, hid);
   }
 });
 
 router.post('/:id/mc-reset', async (req, res) => {
   if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  const hid = `api-${req.user.id}-${++bmcHolderSeq}`;
+  let spec = null;
   try {
-    const spec = bmcSpec(req);
+    spec = bmcSpec(req, hid);
     const message = await bmc.bmcReset(spec);
     auditReq(req, 'bmc.mc_reset', spec.host);
     res.json({ ok: true, message });
   } catch (e) {
     res.status(400).json({ error: e.message });
+  } finally {
+    bmcSpecDone(spec, hid);
   }
 });
 
 router.get('/:id/sel', async (req, res) => {
   if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  const hid = `api-${req.user.id}-${++bmcHolderSeq}`;
+  let spec = null;
   try {
-    res.json(JSON.parse(await bmc.readSel(bmcSpec(req))));
+    spec = bmcSpec(req, hid);
+    res.json(JSON.parse(await bmc.readSel(spec)));
   } catch (e) {
     res.status(400).json({ error: e.message });
+  } finally {
+    bmcSpecDone(spec, hid);
   }
 });
 
 router.get('/:id/sensors', async (req, res) => {
   if (!bmc) return res.status(503).json({ error: `bmc addon unavailable: ${bmcError}` });
+  const hid = `api-${req.user.id}-${++bmcHolderSeq}`;
+  let spec = null;
   try {
-    const s = JSON.parse(await bmc.readSensors(bmcSpec(req)));
+    spec = bmcSpec(req, hid);
+    const s = JSON.parse(await bmc.readSensors(spec));
     sensorsPoll.record(parseInt(req.params.id, 10), s);
     res.json(s);
   } catch (e) {
     res.status(400).json({ error: e.message });
+  } finally {
+    bmcSpecDone(spec, hid);
   }
 });
 
 router.get('/:id/sensors/history', (req, res) => {
-  res.json({ samples: sensorsPoll.getHistory(parseInt(req.params.id, 10)) });
+  const own = db.prepare('SELECT id FROM hosts WHERE id = ? AND (user_id = ? OR shared = 1)').get(req.params.id, req.user.id);
+  if (!own) return res.status(404).json({ error: 'not found' });
+  res.json({ samples: sensorsPoll.getHistory(own.id) });
 });
 
 router.get('/:id/bmc-detect', async (req, res) => {
@@ -457,7 +496,7 @@ router.get('/:id/bmc-detect', async (req, res) => {
 // ISO staging area: uploads land here until a KVM session mounts them. The
 // kvm ws deletes files a session mounted when that session dies; this sweep
 // catches orphans (crashed sessions, files never mounted).
-const MEDIA_DIR = path.join(__dirname, '..', '..', 'data', 'media');
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
 const MEDIA_CAP = 8 * 1024 * 1024 * 1024; // 8GB per image
 const MEDIA_ORPHAN_MS = 24 * 60 * 60 * 1000;
 fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -505,6 +544,26 @@ router.put('/:id/media-upload', (req, res) => {
     res.json({ path: file });
   });
   req.pipe(out);
+});
+
+// Durable (tmux-backed) sessions owned by me — lets the UI offer "resume"
+// for shells that outlived a server restart or a page refresh.
+router.get('/durable-sessions', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT s.session_id, s.host_id, s.label, s.created_at, s.updated_at, h.name AS host_name
+       FROM ssh_sessions s LEFT JOIN hosts h ON h.id = s.host_id
+       WHERE s.user_id = ? ORDER BY s.updated_at DESC`
+    )
+    .all(req.user.id);
+  res.json({
+    sessions: rows.map((r) => ({
+      ...r,
+      created_at: r.created_at * 1000,
+      updated_at: r.updated_at * 1000,
+      live: sessions.has(r.session_id),
+    })),
+  });
 });
 
 module.exports = router;

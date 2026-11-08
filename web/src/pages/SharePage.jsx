@@ -6,7 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TermIcon, Eye, MousePointer2, Clock, MonitorPlay } from 'lucide-react';
+import { Terminal as TermIcon, Eye, MousePointer2, Clock, MonitorPlay, Lock } from 'lucide-react';
 import { api } from '../api';
 import { decodeFrame, paintFrame } from '../lib/kvm';
 
@@ -17,15 +17,19 @@ const encoder = new TextEncoder();
 export default function SharePage() {
   const { token } = useParams();
   const containerRef = useRef(null);
-  const [meta, setMeta] = useState(null); // {label, mode, expires_at}
+  const [meta, setMeta] = useState(null); // {label, mode, expires_at, requires_password}
   const [error, setError] = useState('');
   const [closed, setClosed] = useState('');
+  const [pw, setPw] = useState(''); // accepted password — mounts the viewer
+  const [pwDraft, setPwDraft] = useState(''); // what the form currently holds
+  const [pwError, setPwError] = useState('');
 
   useEffect(() => {
     let term, ws, ro;
     api(`/api/public/share/${token}`)
       .then((m) => {
         setMeta(m);
+        if (m.requires_password && !pw) return; // password gate renders instead
         if (m.kind === 'kvm') return; // the canvas viewer owns its own socket
         term = new Terminal({
           cursorBlink: false,
@@ -71,6 +75,15 @@ export default function SharePage() {
           } catch {
             return;
           }
+          if (msg.type === 'share_auth_required') {
+            if (msg.error) {
+              setPw('');
+              setPwError(msg.error);
+            } else if (pw && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'share_auth', password: pw }));
+            }
+            return;
+          }
           if (msg.type === 'status' && (msg.state === 'closed' || msg.state === 'error')) {
             setClosed(msg.message || 'session closed');
           }
@@ -98,7 +111,14 @@ export default function SharePage() {
       term?.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, pw]);
+
+  const submitPw = (e) => {
+    e.preventDefault();
+    if (!pwDraft) return;
+    setPwError('');
+    setPw(pwDraft);
+  };
 
   return (
     <div className="h-full flex flex-col bg-ink-950">
@@ -140,8 +160,28 @@ export default function SharePage() {
             <p className="text-xs text-zinc-600 mt-1">ask the owner for a fresh link</p>
           </div>
         </div>
+      ) : meta?.requires_password && !pw ? (
+        <div className="flex-1 flex items-center justify-center">
+          <form onSubmit={submitPw} className="card px-6 py-5 w-80 space-y-3">
+            <div className="flex items-center gap-2 text-sm text-zinc-200">
+              <Lock size={15} className="text-emerald-400" /> This link is password protected
+            </div>
+            <input
+              className="input"
+              type="password"
+              autoFocus
+              placeholder="share password"
+              value={pwDraft}
+              onChange={(e) => setPwDraft(e.target.value)}
+            />
+            {pwError && <p className="text-xs text-red-400">{pwError}</p>}
+            <button className="btn-primary w-full justify-center" disabled={!pwDraft}>
+              Unlock
+            </button>
+          </form>
+        </div>
       ) : meta?.kind === 'kvm' ? (
-        <KvmShareView token={token} />
+        <KvmShareView token={token} sharePw={pw} onAuthFail={(m) => { setPw(''); setPwError(m || 'incorrect password'); }} />
       ) : (
         <div className="flex-1 relative min-h-0">
           <div ref={containerRef} className="absolute inset-0" />
@@ -158,7 +198,7 @@ export default function SharePage() {
 
 // Read-only BMC console for a kvm share link: same KVMF wire frames the
 // owner's KvmPane decodes, painted to a canvas. No input path exists.
-function KvmShareView({ token }) {
+function KvmShareView({ token, sharePw, onAuthFail }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [state, setState] = useState({ status: 'connecting', msg: '' });
@@ -184,6 +224,13 @@ function KvmShareView({ token }) {
       }
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === 'share_auth_required') {
+        if (msg.error) onAuthFail?.(msg.error);
+        else if (sharePw && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'share_auth', password: sharePw }));
+        }
+        return;
+      }
       if (msg.type === 'ready') setState({ status: 'ready', msg: '' });
       else if (msg.type === 'status') {
         setState({ status: msg.state === 'closed' || msg.state === 'error' ? msg.state : 'connecting', msg: msg.message || '' });
@@ -191,7 +238,7 @@ function KvmShareView({ token }) {
     };
     ws.onclose = () => setState({ status: 'closed', msg: 'share ended' });
     return () => { try { ws.close(); } catch {} };
-  }, [token]);
+  }, [token, sharePw]);
 
   // Keep the canvas centered at native res, scaled to fit — same letterbox
   // approach the owner pane uses via CSS.

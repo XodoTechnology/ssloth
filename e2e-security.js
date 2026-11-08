@@ -117,19 +117,25 @@ function wsCollect(cookie, firstMsg, { until, timeoutMs = 20000, autoTrust = fal
     return totp(totpSecret);
   };
   try {
-    const setup = await admin.api('/api/auth/totp/setup', { method: 'POST', body: {} });
+    // sudo-mode: setup/enable require the account password, not just a session
+    const noPwSetup = await admin.api('/api/auth/totp/setup', { method: 'POST', body: {} });
+    check('totp setup without password rejected', noPwSetup._status === 403);
+    const noPwEnable = await admin.api('/api/auth/totp/enable', { method: 'POST', body: { code: '123456' } });
+    check('totp enable without password rejected', noPwEnable._status === 403);
+
+    const setup = await admin.api('/api/auth/totp/setup', { method: 'POST', body: { password: 'supersecretpw1' } });
     totpSecret = setup.secret;
     check('totp setup returns pending secret', !!totpSecret && !!setup.qr);
 
     const st = await admin.api('/api/auth/state');
     check('totp not enabled before confirm', st.user && st.user.totp_enabled === false);
 
-    const badEnable = await admin.api('/api/auth/totp/enable', { method: 'POST', body: { code: '000000' } });
+    const badEnable = await admin.api('/api/auth/totp/enable', { method: 'POST', body: { code: '000000', password: 'supersecretpw1' } });
     check('enable rejects wrong code', badEnable._status === 400);
 
     const code0 = totp(totpSecret);
     lastStep = nowStep(); // enabling consumes the current step
-    const enable = await admin.api('/api/auth/totp/enable', { method: 'POST', body: { code: code0 } });
+    const enable = await admin.api('/api/auth/totp/enable', { method: 'POST', body: { code: code0, password: 'supersecretpw1' } });
     check('totp enable with valid code', enable.ok === true);
 
     // logout, login without code -> totp_required

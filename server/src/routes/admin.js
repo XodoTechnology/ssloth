@@ -16,6 +16,44 @@ function killUserRuntime(userId) {
 
 const router = express.Router();
 
+// ---- Metrics (admin only, Prometheus text format) ----
+router.get('/metrics', requireAdmin, (req, res) => {
+  const now = Date.now();
+  const wsCount = typeof globalThis.__ssloth_ws_connections === 'function' ? globalThis.__ssloth_ws_connections() : 0;
+  const v = process.version.replace(/^v/, '');
+  const lines = [
+    '# HELP ssloth_uptime_seconds Server uptime in seconds',
+    '# TYPE ssloth_uptime_seconds gauge',
+    `ssloth_uptime_seconds ${Math.round(process.uptime())}`,
+    '# HELP ssloth_ws_connections Currently open WebSocket connections',
+    '# TYPE ssloth_ws_connections gauge',
+    `ssloth_ws_connections ${wsCount}`,
+    '# HELP ssloth_sessions_active Login sessions not yet expired',
+    '# TYPE ssloth_sessions_active gauge',
+    `ssloth_sessions_active ${db.prepare('SELECT COUNT(*) c FROM sessions WHERE expires_at > ?').get(now).c}`,
+    '# HELP ssloth_users_total User accounts',
+    '# TYPE ssloth_users_total gauge',
+    `ssloth_users_total ${db.prepare('SELECT COUNT(*) c FROM users').get().c}`,
+    '# HELP ssloth_hosts_total Configured hosts',
+    '# TYPE ssloth_hosts_total gauge',
+    `ssloth_hosts_total ${db.prepare('SELECT COUNT(*) c FROM hosts').get().c}`,
+    '# HELP ssloth_shares_active Share links not yet expired',
+    '# TYPE ssloth_shares_active gauge',
+    `ssloth_shares_active ${db.prepare('SELECT COUNT(*) c FROM shares WHERE expires_at * 1000 > ?').get(now).c}`,
+    '# HELP ssloth_audit_events_total Audit log entries',
+    '# TYPE ssloth_audit_events_total counter',
+    `ssloth_audit_events_total ${db.prepare('SELECT COUNT(*) c FROM audit').get().c}`,
+    '# HELP ssloth_desktop_mode 1 when running as the desktop app',
+    '# TYPE ssloth_desktop_mode gauge',
+    `ssloth_desktop_mode ${require('../config').DESKTOP ? 1 : 0}`,
+    '# HELP ssloth_nodejs_version_info Node.js version',
+    '# TYPE ssloth_nodejs_version_info gauge',
+    `ssloth_nodejs_version_info{version="${v}"} 1`,
+    '',
+  ];
+  res.type('text/plain; version=0.0.4; charset=utf-8').send(lines.join('\n'));
+});
+
 // ---- Audit log ----
 router.get('/audit', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
@@ -30,9 +68,20 @@ const USERNAME_RE = /^[a-zA-Z0-9_.-]{2,32}$/;
 
 router.get('/users', requireAdmin, (req, res) => {
   const rows = db
-    .prepare('SELECT id, username, is_admin, role, totp_enabled, created_at FROM users ORDER BY username COLLATE NOCASE')
+    .prepare('SELECT id, username, is_admin, role, totp_enabled, lan_allowed, created_at FROM users ORDER BY username COLLATE NOCASE')
     .all();
   res.json({ users: rows });
+});
+
+// Per-account network access (desktop LAN mode): lan_allowed=0 keeps the
+// account usable from the local app but refuses remote sign-in/API use.
+router.post('/users/:id/lan', requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'not found' });
+  const allowed = req.body?.allowed !== false;
+  db.prepare('UPDATE users SET lan_allowed = ? WHERE id = ?').run(allowed ? 1 : 0, target.id);
+  auditReq(req, 'user.lan_changed', `${target.username} -> ${allowed ? 'allowed' : 'denied'}`);
+  res.json({ ok: true });
 });
 
 const VALID_ROLES = ['admin', 'user', 'viewer'];

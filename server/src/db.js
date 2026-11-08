@@ -186,6 +186,10 @@ ensureColumn('hosts', 'protocol', "protocol TEXT NOT NULL DEFAULT 'ssh' CHECK (p
 ensureColumn('hosts', 'mac', "mac TEXT NOT NULL DEFAULT ''");
 ensureColumn('hosts', 'agent_forward', 'agent_forward INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'role', "role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','viewer'))");
+ensureColumn('sessions', 'last_seen_at', 'last_seen_at INTEGER');
+// Desktop LAN mode: may this account authenticate from a non-loopback
+// client? Loopback (the local app) is always allowed.
+ensureColumn('users', 'lan_allowed', 'lan_allowed INTEGER NOT NULL DEFAULT 1');
 db.exec("UPDATE users SET role = 'admin' WHERE is_admin = 1 AND role = 'user'");
 ensureColumn('playbooks', 'schedule_cron', 'schedule_cron TEXT');
 ensureColumn('playbooks', 'schedule_host_id', 'schedule_host_id INTEGER REFERENCES hosts(id) ON DELETE SET NULL');
@@ -193,6 +197,8 @@ ensureColumn('playbooks', 'schedule_enabled', 'schedule_enabled INTEGER NOT NULL
 ensureColumn('playbooks', 'next_run_at', 'next_run_at INTEGER');
 ensureColumn('playbooks', 'last_run_at', 'last_run_at INTEGER');
 ensureColumn('hosts', 'use_count', 'use_count INTEGER NOT NULL DEFAULT 0');
+ensureColumn('shares', 'password_hash', 'password_hash TEXT');
+ensureColumn('hosts', 'durable', 'durable INTEGER NOT NULL DEFAULT 0');
 
 // DBs created before 'bmc' was a protocol carry a CHECK that rejects it, and
 // SQLite can't alter a CHECK in place — rebuild the table once if stale.
@@ -376,6 +382,28 @@ CREATE TABLE IF NOT EXISTS host_group_members (
   host_id  INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
   PRIMARY KEY (group_id, host_id)
 );
+
+-- Generic key/value store for server-level settings that don't merit a
+-- table of their own (currently: desktop LAN/network access config).
+CREATE TABLE IF NOT EXISTS server_settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Durable (tmux-backed) SSH sessions: the remote shell lives in tmux on the
+-- target host, so it survives WS drops AND server restarts. Rows are written
+-- on connect and removed on explicit session destroy.
+CREATE TABLE IF NOT EXISTS ssh_sessions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id  TEXT NOT NULL UNIQUE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  host_id     INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  tmux_name   TEXT NOT NULL,
+  label       TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_ssh_sessions_user ON ssh_sessions(user_id);
 `);
 
 function audit(user, action, detail, req) {
@@ -389,6 +417,13 @@ function audit(user, action, detail, req) {
       String(detail || '').slice(0, 500),
       req ? (req.ip || '') : ''
     );
+    // SIEM forwarding: matching webhooks get the event too. Lazy require —
+    // notify.js depends on this module. Only user-attributed events forward.
+    if (user && user.id) {
+      try {
+        require('./notify').notify(user.id, action, String(detail || action).slice(0, 300));
+      } catch {}
+    }
   } catch (e) {
     console.error('[ssloth] audit write failed:', e.message);
   }

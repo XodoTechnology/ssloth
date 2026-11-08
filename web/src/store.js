@@ -23,6 +23,7 @@ export const useStore = create((set, get) => ({
   booted: false,
   desktop: false,
   pinSet: false,
+  oidc: false,
 
   // data
   hosts: [],

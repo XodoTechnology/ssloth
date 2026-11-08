@@ -4,7 +4,7 @@
 // sensor_history (throttled), and sensor_alert_rules turn status-tier
 // crossings into notifications + webhooks + audit rows.
 
-const { bmc, applyRoutes } = require('./bmc');
+const { bmc, applyRoutes, releaseRoute } = require('./bmc');
 const { db, audit } = require('./db');
 const { resolveConnectSpec } = require('./ssh/manager');
 const { sensorTier, tierAtLeast } = require('./sensor-tier');
@@ -106,9 +106,10 @@ function latest(hostId) {
   return arr && arr.length ? arr[arr.length - 1] : null;
 }
 
-function specFor(hostRow) {
+let sweepSeq = 0;
+function specFor(hostRow, holderId) {
   const spec = resolveConnectSpec(hostRow.user_id, { hostId: hostRow.id });
-  applyRoutes(resolveConnectSpec, hostRow.user_id, spec);
+  applyRoutes(resolveConnectSpec, hostRow.user_id, spec, { id: holderId });
   return { host: spec.hostname, user: spec.username || '', pass: spec.password || '' };
 }
 
@@ -119,13 +120,19 @@ async function sweep() {
     hosts = db.prepare("SELECT id, user_id FROM hosts WHERE protocol = 'bmc' AND COALESCE(sensor_exclude,0) = 0").all();
   } catch { return; }
   for (const h of hosts) {
+    const hid = `sensors-${h.id}-${++sweepSeq}`;
+    let spec = null;
     try {
-      const spec = specFor(h);
+      spec = specFor(h, hid);
       const s = JSON.parse(await bmc.readSensors(spec));
       record(h.id, s);
       lastErr.delete(h.id);
     } catch (e) {
       lastErr.set(h.id, String(e && e.message || e).slice(0, 140));
+    } finally {
+      if (spec) {
+        try { releaseRoute(spec.host, hid); } catch {}
+      }
     }
   }
 }

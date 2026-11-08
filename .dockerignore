@@ -1,0 +1,9 @@
+# Build context hygiene — everything below is rebuilt inside the image or
+# never needed at build time. Keeps vendor/bmc/target (1.3G of Rust artifacts)
+# and host node_modules out of the context.
+**/node_modules
+**/target
+**/dist
+server/data
+.git
+*.log

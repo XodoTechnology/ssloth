@@ -87,6 +87,26 @@ function handleTerminalWs(ws, req, user) {
         if (session || spec) return;
         const s = getSession(user.id, String(msg.sessionId || ''));
         if (!s || !s.stream) {
+          // Live session gone — maybe it's a durable (tmux) session whose
+          // server-side state died with a restart. The remote shell may
+          // still be alive; rebuild the connection and re-attach.
+          const row = db
+            .prepare('SELECT * FROM ssh_sessions WHERE session_id = ? AND user_id = ?')
+            .get(String(msg.sessionId || ''), user.id);
+          if (row && row.host_id) {
+            try {
+              spec = resolveConnectSpec(user.id, { hostId: row.host_id });
+            } catch (e) {
+              send({ type: 'status', state: 'error', message: e.message });
+              return ws.close();
+            }
+            spec.durableName = row.tmux_name;
+            spec.resumeSessionId = row.session_id;
+            spec.resumeLabel = row.label;
+            pendingResize = { cols: clampDim(msg.cols, 80), rows: clampDim(msg.rows, 24) };
+            connect();
+            return;
+          }
           send({ type: 'status', state: 'gone' });
           return;
         }
@@ -104,18 +124,26 @@ function handleTerminalWs(ws, req, user) {
       }
 
       case 'trust':
-        if (awaiting !== 'trust' || !pendingKey) return;
-        if (msg.accept === 'always') {
-          trustHostKey(user.id, pendingKey.hostname, pendingKey.port, pendingKey.keyB64, pendingKey.algorithm);
-          audit(user, 'ssh.hostkey_trusted', `${pendingKey.hostname}:${pendingKey.port} ${pendingKey.fingerprint}`, req);
-        }
-        if (msg.accept === 'always' || msg.accept === 'once') {
+        if (!pendingKey || (awaiting !== 'trust' && awaiting !== 'trust_mismatch')) return;
+        const isChange = awaiting === 'trust_mismatch';
+        // A changed key can only be re-trusted permanently ('always') —
+        // 'once' would leave the stale fingerprint stored for next time.
+        if (msg.accept === 'always' || (!isChange && msg.accept === 'once')) {
+          if (msg.accept === 'always') {
+            trustHostKey(user.id, pendingKey.hostname, pendingKey.port, pendingKey.keyB64, pendingKey.algorithm);
+            audit(
+              user,
+              isChange ? 'ssh.hostkey_replaced' : 'ssh.hostkey_trusted',
+              `${pendingKey.hostname}:${pendingKey.port} ${pendingKey.fingerprint}${isChange ? ` (was ${pendingKey.expected})` : ''}`,
+              req
+            );
+          }
           acceptedKeys[`${pendingKey.hostname}:${pendingKey.port}`] = pendingKey.keyB64;
           pendingKey = null;
           awaiting = null;
           connect();
         } else {
-          send({ type: 'status', state: 'error', message: 'host key rejected' });
+          send({ type: 'status', state: 'error', message: isChange ? 'host key change rejected' : 'host key rejected' });
           ws.close();
         }
         break;
@@ -249,19 +277,28 @@ function handleTerminalWs(ws, req, user) {
           case 'hostkey_mismatch': {
             const hop = err.hopSpec || spec;
             audit(user, 'ssh.hostkey_mismatch', `${hop.hostname}:${hop.port} saw ${err.fingerprint}, expected ${err.expected}`, req);
-            send({
-              type: 'hostkey_mismatch',
-              state: 'error',
+            // Same trust-prompt flow as a first-seen key, but flagged as a
+            // change: the socket stays open until the user decides whether
+            // the new key is legitimate (reinstall) or an abort.
+            pendingKey = {
               hostname: hop.hostname,
               port: hop.port,
               fingerprint: err.fingerprint,
               expected: err.expected,
-              message:
-                `HOST KEY CHANGED for ${hop.hostname}:${hop.port}! ` +
-                `Expected ${err.expected}, got ${err.fingerprint}. ` +
-                'This could indicate a man-in-the-middle attack. Delete the stored key in Settings if the change is expected.',
+              keyB64: err.keyB64,
+              algorithm: err.algorithm,
+              hop: err.hopSpec ? 'jump' : 'target',
+            };
+            awaiting = 'trust_mismatch';
+            send({
+              type: 'hostkey_mismatch',
+              hostname: hop.hostname,
+              port: hop.port,
+              fingerprint: err.fingerprint,
+              expected: err.expected,
+              algorithm: err.algorithm,
+              hop: pendingKey.hop,
             });
-            ws.close();
             break;
           }
           case 'auth_failed':
@@ -282,7 +319,13 @@ function handleTerminalWs(ws, req, user) {
   }
 
   function onConnected(conn) {
-    const sess = createSession(user.id, conn, spec);
+    // A concurrent resume could have rebuilt this session while we connected.
+    if (spec.resumeSessionId && getSession(user.id, spec.resumeSessionId)) {
+      try { conn.end(); } catch {}
+      send({ type: 'status', state: 'error', message: 'session already resumed elsewhere' });
+      return ws.close();
+    }
+    const sess = createSession(user.id, conn, spec, spec.resumeSessionId || null);
     session = sess;
     attachWs(sess, ws);
     audit(user, 'ssh.connect', spec.label, req);
@@ -291,9 +334,31 @@ function handleTerminalWs(ws, req, user) {
         db.prepare('UPDATE hosts SET last_used_at = unixepoch(), use_count = use_count + 1 WHERE id = ?').run(spec.hostId);
       } catch {}
     }
-    conn.shell(
-      { term: 'xterm-256color', cols: pendingResize.cols, rows: pendingResize.rows },
-      (err, s) => {
+    // Durable sessions run inside tmux on the remote host — the shell (and
+    // everything in it) survives disconnects and server restarts.
+    const tmuxName = spec.durableName || (spec.durable ? `ssloth-${sess.id}` : null);
+    if (tmuxName) sess.tmuxName = tmuxName;
+    if (tmuxName && spec.hostId) {
+      try {
+        db.prepare(
+          `INSERT INTO ssh_sessions (session_id, user_id, host_id, tmux_name, label) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET updated_at = unixepoch()`
+        ).run(sess.id, user.id, spec.hostId, tmuxName, spec.resumeLabel || spec.label);
+      } catch {}
+    }
+    const openShell = tmuxName
+      ? (cb) =>
+          conn.exec(
+            `tmux new-session -A -s ${tmuxName}`,
+            { pty: { term: 'xterm-256color', cols: pendingResize.cols, rows: pendingResize.rows } },
+            cb
+          )
+      : (cb) =>
+          conn.shell(
+            { term: 'xterm-256color', cols: pendingResize.cols, rows: pendingResize.rows },
+            cb
+          );
+    openShell((err, s) => {
         if (err) {
           send({ type: 'status', state: 'error', message: 'shell request failed: ' + err.message });
           return destroySession(sess.id);

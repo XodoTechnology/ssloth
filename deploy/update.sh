@@ -14,11 +14,11 @@ esac; done
 log() { printf '==> %s\n' "$*"; }
 if [ "$PULL" = 1 ]; then
   log "pull"
-  sudo -u ssloth git -C "$DIR" pull --ff-only
+  runuser -u ssloth -- git -C "$DIR" pull --ff-only
 else
   log "pull skipped (--no-pull)"
 fi
 log "npm"
-sudo -u ssloth npm ci --prefix "$DIR/server" 2>/dev/null || sudo -u ssloth npm install --prefix "$DIR/server"
+runuser -u ssloth -- npm ci --prefix "$DIR/server" 2>/dev/null || runuser -u ssloth -- npm install --prefix "$DIR/server"
 [ "$RESTART" = 1 ] && { systemctl restart ssloth 2>/dev/null && log "restarted ssloth" || true; }
-log "updated — $(sudo -u ssloth git -C "$DIR" log --oneline -1 2>/dev/null || echo unknown)"
+log "updated — $(runuser -u ssloth -- git -C "$DIR" log --oneline -1 2>/dev/null || echo unknown)"

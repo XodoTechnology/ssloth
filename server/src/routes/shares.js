@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { db } = require('../db');
-const { randomToken, sha256B64 } = require('../crypto');
+const { randomToken, sha256B64, hashPassword } = require('../crypto');
 const { auditReq } = require('../auth');
 const { sessions, closeViewersByShare } = require('../ssh/manager');
 const { kvmSession, closeKvmViewersByShare } = require('../ws/kvm');
@@ -16,8 +16,8 @@ const MAX_TTL = 24 * 60; // minutes
 // Create an ephemeral share link for one of my live sessions — ssh terminal
 // or kvm console. KVM shares are view-only: a remote-controlled BMC console
 // is too sensitive a surface for a link credential.
-router.post('/', (req, res) => {
-  const { session_id, kind, mode, ttl_minutes } = req.body || {};
+router.post('/', async (req, res) => {
+  const { session_id, kind, mode, ttl_minutes, password } = req.body || {};
   const isKvm = kind === 'kvm';
   const session = isKvm ? kvmSession(session_id) : sessions.get(String(session_id || ''));
   if (!session || session.userId !== req.user.id) {
@@ -31,12 +31,22 @@ router.post('/', (req, res) => {
 
   const token = randomToken();
   const expiresAt = Date.now() + ttl * 60 * 1000;
+  // Optional share password — scrypt-hashed like account passwords; the link
+  // alone is no longer sufficient when set.
+  let pwHash = null;
+  if (password) {
+    try {
+      pwHash = await hashPassword(String(password));
+    } catch {
+      return res.status(500).json({ error: 'could not secure share password' });
+    }
+  }
   const info = db
     .prepare(
-      'INSERT INTO shares (token_hash, user_id, session_id, kind, label, mode, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO shares (token_hash, user_id, session_id, kind, label, mode, expires_at, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .run(sha256B64(token), req.user.id, session.id, isKvm ? 'kvm' : 'ssh', session.label, mode, Math.floor(expiresAt / 1000));
-  auditReq(req, 'share.created', `${mode} ${isKvm ? 'kvm ' : ''}share of '${session.label}' ttl=${ttl}m`);
+    .run(sha256B64(token), req.user.id, session.id, isKvm ? 'kvm' : 'ssh', session.label, mode, Math.floor(expiresAt / 1000), pwHash);
+  auditReq(req, 'share.created', `${mode} ${isKvm ? 'kvm ' : ''}share of '${session.label}' ttl=${ttl}m${pwHash ? ' pw' : ''}`);
   res.json({
     share: {
       id: info.lastInsertRowid,
@@ -45,6 +55,7 @@ router.post('/', (req, res) => {
       mode,
       label: session.label,
       expires_at: expiresAt,
+      has_password: !!pwHash,
     },
   });
 });
@@ -52,11 +63,13 @@ router.post('/', (req, res) => {
 // List my active share links.
 router.get('/', (req, res) => {
   const rows = db
-    .prepare('SELECT id, session_id, kind, label, mode, expires_at, created_at FROM shares WHERE user_id = ? ORDER BY id DESC')
+    .prepare('SELECT id, session_id, kind, label, mode, expires_at, created_at, password_hash FROM shares WHERE user_id = ? ORDER BY id DESC')
     .all(req.user.id);
   res.json({
     shares: rows.map((r) => ({
       ...r,
+      password_hash: undefined,
+      has_password: !!r.password_hash,
       expires_at: r.expires_at * 1000,
       created_at: r.created_at * 1000,
       live: r.kind === 'kvm' ? !!kvmSession(r.session_id) : sessions.has(r.session_id),
@@ -79,7 +92,7 @@ router.delete('/:id', (req, res) => {
 publicRouter.get('/:token', (req, res) => {
   const row = shareByToken(req.params.token);
   if (!row) return res.status(404).json({ error: 'link expired or revoked' });
-  res.json({ label: row.label, mode: row.mode, kind: row.kind || 'ssh', expires_at: row.expires_at * 1000 });
+  res.json({ label: row.label, mode: row.mode, kind: row.kind || 'ssh', expires_at: row.expires_at * 1000, requires_password: !!row.password_hash });
 });
 
 function shareByToken(token) {

@@ -28,6 +28,7 @@ export default function HostForm({ host, onClose, onSaved }) {
     credential_id: host?.credential_id || '',
     jump_host_id: host?.jump_host_id || '',
     record: !!host?.record,
+    durable: !!host?.durable,
     shared: !!host?.shared,
     password: '',
     folder: host?.folder || '',
@@ -60,6 +61,7 @@ export default function HostForm({ host, onClose, onSaved }) {
         credential_id: form.auth_type === 'credential' ? parseInt(form.credential_id, 10) || null : null,
         jump_host_id: form.jump_host_id ? parseInt(form.jump_host_id, 10) : null,
         record: !!form.record,
+        durable: form.protocol === 'ssh' && !!form.durable,
         shared: !!form.shared,
         folder: form.folder,
         region: form.region,
@@ -284,6 +286,20 @@ export default function HostForm({ host, onClose, onSaved }) {
             />
             auto-record sessions
           </label>
+          {form.protocol === 'ssh' && (
+          <label
+            className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer"
+            title="Run the shell inside tmux on the remote host — the session survives disconnects and ssloth restarts (requires tmux on the target)"
+          >
+            <input
+              type="checkbox"
+              className="accent-emerald-600"
+              checked={form.durable}
+              onChange={(e) => setForm((f) => ({ ...f, durable: e.target.checked }))}
+            />
+            durable session
+          </label>
+          )}
           {form.protocol === 'ssh' && (
           <label
             className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer"

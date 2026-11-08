@@ -7,10 +7,13 @@ const express = require('express');
 const compression = require('compression');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 const { WebSocketServer } = require('ws');
 const cookie = require('cookie');
 
-const { PORT, BIND, WEB_DIST, SECURE_COOKIES } = require('./config');
+const { PORT, BIND, WEB_DIST, SECURE_COOKIES, DESKTOP, MASTER_KEY_OLD } = require('./config');
+const { db } = require('./db');
+const { rotateSecrets } = require('./crypto');
 const {
   COOKIE_NAME,
   resolveToken,
@@ -19,7 +22,11 @@ const {
   checkOrigin,
   checkWsOrigin,
   checkLoopbackHost,
+  touchSession,
+  lanDenied,
 } = require('./auth');
+const { lanAccessGuard, getNetConfig, lanActive, isLoopbackClient, clientIpAllowed, setLanStatus } = require('./netcfg');
+const netcfgRoutes = require('./routes/netcfg');
 const { handleTerminalWs } = require('./ws/terminal');
 const { handleShareWs } = require('./ws/share');
 
@@ -46,6 +53,18 @@ const { requireWrite } = require('./auth');
 
 const app = express();
 app.disable('x-powered-by');
+
+// Last line of defense: Express 4 does not forward errors thrown inside
+// async route handlers, and ws message callbacks bypass the error middleware
+// entirely — without these, any stray rejection/exception kills the process
+// (Node >=15 default) and every session with it.
+process.on('unhandledRejection', (e) => {
+  console.error('[ssloth] unhandled rejection:', e);
+});
+process.on('uncaughtException', (e) => {
+  console.error('[ssloth] uncaught exception:', e);
+  process.exit(1);
+});
 const trustProxy = process.env.TRUST_PROXY;
 if (trustProxy && trustProxy !== 'false' && trustProxy !== '0') {
   app.set('trust proxy', trustProxy === 'true' ? true : trustProxy);
@@ -93,6 +112,9 @@ app.use(cookieParser());
 // Desktop mode is loopback-only — reject foreign Host headers early so a
 // DNS-rebinding domain can't reach the API or WS at all.
 app.use(checkLoopbackHost);
+// Desktop LAN mode: remote clients outside the IP allowlist get a flat 403
+// before any route runs (including the login page itself).
+app.use(lanAccessGuard);
 
 // SFTP streams raw bodies on upload, so it mounts before the JSON parser.
 app.use('/api/sftp', checkOrigin, requireAuth, requireWrite, sftpRoutes);
@@ -100,7 +122,17 @@ app.use('/api/sftp', checkOrigin, requireAuth, requireWrite, sftpRoutes);
 // Vault export/import payloads (sealed secrets + hundreds of hosts) can
 // legitimately exceed the general 2MB cap.
 app.use('/api/vault', checkOrigin, express.json({ limit: '16mb' }));
-app.use('/api', checkOrigin, express.json({ limit: '2mb' }));
+// Per-IP ceiling on the whole API — generous for normal UI polling, but caps
+// scraping/abuse. Stricter per-route limiters (auth, PIN, KVM input) still win.
+const apiLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate limit exceeded' },
+});
+
+app.use('/api', apiLimiter, checkOrigin, express.json({ limit: '2mb' }));
 app.use('/api/auth', authRoutes);
 // 'viewer' role: read-only — requireWrite refuses their mutations (except
 // the auth self-service routes above: logout/password change stay allowed).
@@ -119,6 +151,7 @@ app.use('/api/tokens', requireAuth, requireWrite, tokenRoutes);
 app.use('/api/notifications', requireAuth, requireWrite, notificationRoutes);
 app.use('/api/workspaces', requireAuth, requireWrite, require('./routes/workspaces'));
 app.use('/api/admin', requireAuth, requireWrite, adminRoutes);
+app.use('/api/netcfg', requireAuth, requireWrite, netcfgRoutes.router);
 // Public read-only metadata for share links (token in path is the credential).
 app.use('/api/public/share', sharePublicRoutes);
 
@@ -160,7 +193,17 @@ const server = http.createServer(app);
 // ---- WebSocket upgrade (terminal bridge) ----
 const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
-server.on('upgrade', (req, socket, head) => {
+// Global socket ceiling — per-user session caps exist, but share viewers and
+// pre-auth sockets aren't covered by them.
+const MAX_WS_CONNECTIONS = 512;
+let wsConnections = 0;
+globalThis.__ssloth_ws_connections = () => wsConnections;
+wss.on('connection', (ws) => {
+  wsConnections++;
+  ws.on('close', () => wsConnections--);
+});
+
+function onUpgrade(req, socket, head) {
   const url = new URL(req.url, 'http://localhost');
   const shareMatch = url.pathname.match(/^\/ws\/share\/([A-Za-z0-9_-]{20,128})$/);
   if (url.pathname !== '/ws/terminal' && url.pathname !== '/ws/telnet' && url.pathname !== '/ws/kvm' && !shareMatch) {
@@ -169,6 +212,20 @@ server.on('upgrade', (req, socket, head) => {
   }
   if (!checkWsOrigin(req)) {
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  // Raw upgrade reqs aren't Express requests — give audit() a real client IP.
+  req.ip = req.socket.remoteAddress;
+  // Desktop LAN mode: the same IP allowlist that guards HTTP applies to
+  // every WebSocket, share viewers included.
+  if (lanActive() && !isLoopbackClient(req) && !clientIpAllowed(req)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  if (wsConnections >= MAX_WS_CONNECTIONS) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
     socket.destroy();
     return;
   }
@@ -183,17 +240,68 @@ server.on('upgrade', (req, socket, head) => {
   try {
     cookies = cookie.parse(req.headers.cookie || '');
   } catch {}
-  const user = resolveToken(cookies[COOKIE_NAME]) || desktopUser();
+  const user = resolveToken(cookies[COOKIE_NAME]) || desktopUser(req);
   if (!user) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
   }
+  if (lanDenied(req, user)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
   wss.handleUpgrade(req, socket, head, (ws) => {
+    // An attached console is session activity — keep last_seen_at fresh so
+    // the idle timeout doesn't log out a user watching a running job.
+    if (user.session_id) {
+      const keepalive = setInterval(() => touchSession(user.session_id), 60_000);
+      keepalive.unref();
+      ws.on('close', () => clearInterval(keepalive));
+    }
     if (url.pathname === '/ws/telnet') handleTelnetWs(ws, req, user);
     else if (url.pathname === '/ws/kvm') handleKvmWs(ws, req, user);
     else handleTerminalWs(ws, req, user);
   });
+}
+server.on('upgrade', onUpgrade);
+
+// ---- Optional LAN listener (desktop mode only) ----
+// A second http server sharing `app` and the WS upgrade path, bound per the
+// netcfg settings. The primary loopback server — and the Electron window on
+// it — is untouched, so enabling/disabling LAN access never drops sessions.
+let lanServer = null;
+let lanServerKey = null;
+
+function syncLanServer() {
+  const cfg = getNetConfig();
+  const want = DESKTOP && cfg.enabled && cfg.port ? `${cfg.bind}:${cfg.port}` : null;
+  if (want === lanServerKey) return;
+  if (lanServer) {
+    try { lanServer.close(); } catch {}
+    lanServer = null;
+    lanServerKey = null;
+  }
+  setLanStatus({ listening: false, error: null, address: null });
+  if (!want) return;
+  const srv = http.createServer(app);
+  srv.on('upgrade', onUpgrade);
+  srv.on('error', (e) => {
+    setLanStatus({ listening: false, error: e.message, address: null });
+    lanServer = null;
+    lanServerKey = null;
+    console.error(`[ssloth] LAN listener failed on ${want}: ${e.message}`);
+  });
+  srv.listen(cfg.port, cfg.bind, () => {
+    lanServer = srv;
+    lanServerKey = want;
+    setLanStatus({ listening: true, error: null, address: `http://${cfg.bind}:${cfg.port}` });
+    console.log(`[ssloth] LAN listening on http://${cfg.bind}:${cfg.port}`);
+  });
+}
+netcfgRoutes.setOnChange(syncLanServer);
+server.on('close', () => {
+  try { lanServer?.close(); } catch {}
 });
 
 startScheduler();
@@ -201,7 +309,26 @@ startSweeper();
 require('./sensors-poll').start();
 require('./hostkey-monitor').start();
 
+// Opt-in master-key rotation: only runs when SSLOTH_MASTER_KEY_OLD is set.
+// Every encrypted column is re-sealed under the current key; unset the OLD
+// env var once this reports zero failures.
+if (MASTER_KEY_OLD) {
+  try {
+    const r = rotateSecrets(db);
+    console.log(`[ssloth] master-key rotation: ${r.migrated} secret(s) re-encrypted, ${r.failed} undecryptable`);
+    if (r.failed) {
+      console.error('[ssloth] rotation incomplete — some secrets could not be decrypted with either key.');
+      console.error('[ssloth] fix via vault export/import, then unset SSLOTH_MASTER_KEY_OLD.');
+    } else {
+      console.log('[ssloth] rotation complete — unset SSLOTH_MASTER_KEY_OLD and restart.');
+    }
+  } catch (e) {
+    console.error('[ssloth] master-key rotation failed:', e.message);
+  }
+}
+
 server.listen(PORT, BIND, () => {
   const addr = server.address();
   console.log(`[ssloth] listening on http://${addr.address}:${addr.port}`);
+  syncLanServer(); // pick up persisted LAN settings, if any
 });

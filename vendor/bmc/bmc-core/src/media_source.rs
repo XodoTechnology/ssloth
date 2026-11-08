@@ -177,10 +177,59 @@ impl Write for Conn {
     }
 }
 
+/// The URL is chosen by an API caller, so the fetch is an SSRF channel into
+/// loopback, the LAN, and cloud metadata (169.254.169.254) — including via
+/// redirects, which `Http::open` follows. Every connection (first request and
+/// each redirect target alike) therefore refuses private/reserved addresses
+/// unless BMC_MEDIA_ALLOW_PRIVATE opts out for LAN-hosted images. This is
+/// the same guard ssloth's webhook notifier applies; BMCs that fetch URLs
+/// natively never come through here.
+fn allow_private_net() -> bool {
+    matches!(
+        std::env::var("BMC_MEDIA_ALLOW_PRIVATE").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+fn is_private_addr(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            o[0] == 0 || o[0] == 10 || o[0] == 127 // this-net, private, loopback
+                || (o[0] == 169 && o[1] == 254) // link-local / cloud metadata
+                || (o[0] == 172 && (16..=31).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 168)
+                || (o[0] == 100 && (64..=127).contains(&o[1])) // CGNAT
+                || o[0] >= 224 // multicast + reserved
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+            {
+                return true;
+            }
+            match v6.to_ipv4_mapped() {
+                Some(v4) => is_private_addr(&IpAddr::V4(v4)),
+                None => false,
+            }
+        }
+    }
+}
+
 fn connect(u: &Url) -> std::io::Result<BufReader<Conn>> {
     let addr = std::net::ToSocketAddrs::to_socket_addrs(&(u.host.as_str(), u.port))?
         .next()
         .ok_or_else(|| ioerr(&format!("cannot resolve {}", u.host)))?;
+    if !allow_private_net() && is_private_addr(&addr.ip()) {
+        return Err(ioerr(&format!(
+            "refusing to fetch media from a private or reserved address ({})",
+            addr.ip()
+        )));
+    }
     let tcp = TcpStream::connect_timeout(&addr, TIMEOUT)?;
     tcp.set_read_timeout(Some(TIMEOUT))?;
     tcp.set_nodelay(true).ok();
@@ -447,4 +496,35 @@ fn fetch_on(conn: &mut BufReader<Conn>, u: &Url, start: u64, end: u64)
 
 fn ioerr(m: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, m.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_private_addr;
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    #[test]
+    fn blocks_private_and_reserved() {
+        for ip in [
+            "0.1.2.3", "10.1.2.3", "100.64.0.1", "100.127.255.1", "127.0.0.1",
+            "169.254.169.254", "172.16.0.1", "172.31.255.1", "192.168.1.1",
+            "224.0.0.1", "240.0.0.1", "255.255.255.255",
+            "::", "::1", "fe80::1", "fc00::1", "fd12::1", "ff02::1",
+            "::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:169.254.169.254",
+        ] {
+            assert!(is_private_addr(&IpAddr::from_str(ip).unwrap()), "{ip} should be blocked");
+        }
+    }
+
+    #[test]
+    fn allows_public() {
+        for ip in [
+            "8.8.8.8", "1.1.1.1", "93.184.216.34", "100.63.255.1", "100.128.0.1",
+            "172.15.255.1", "172.32.0.1", "11.0.0.1", "192.167.1.1",
+            "2606:4700:4700::1111", "2001:4860:4860::8888",
+        ] {
+            assert!(!is_private_addr(&IpAddr::from_str(ip).unwrap()), "{ip} should be allowed");
+        }
+    }
 }

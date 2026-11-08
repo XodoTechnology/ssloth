@@ -3,6 +3,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { db } = require('../db');
 const { auditReq } = require('../auth');
 const { REC_DIR } = require('../ssh/recorder');
@@ -23,36 +24,49 @@ router.get('/', (req, res) => {
 });
 
 // Search output text across this user's recordings — "which session ran X".
-// Casts are JSONL ([t,'o',data]); we scan the data payloads only.
-router.get('/search', (req, res) => {
-  const q = String(req.query.q || '').slice(0, 200);
-  if (!q) return res.status(400).json({ error: 'q required' });
-  const rows = db
-    .prepare('SELECT id, label, file, started_at, size FROM recordings WHERE user_id = ? ORDER BY id DESC LIMIT 200')
-    .all(req.user.id);
-  const needle = q.toLowerCase();
-  const hits = [];
-  for (const r of rows) {
-    const full = path.join(REC_DIR, path.basename(r.file));
-    if (!full.startsWith(REC_DIR) || !fs.existsSync(full)) continue;
-    try {
-      const text = fs.readFileSync(full, 'utf8');
-      let count = 0, firstTs = null;
-      for (const line of text.split('\n')) {
-        if (!line.startsWith('[')) continue;
-        // cheap pre-filter before JSON.parse on every line
-        if (!line.toLowerCase().includes(needle)) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        if (ev[1] === 'o' && typeof ev[2] === 'string' && ev[2].toLowerCase().includes(needle)) {
-          count++;
-          if (firstTs === null) firstTs = ev[0];
+// Casts are JSONL ([t,'o',data]); we scan the data payloads only. Files are
+// streamed line-by-line so a search never blocks the event loop, and a
+// deadline bounds total work — partial results beat a stalled server.
+const SEARCH_DEADLINE_MS = 20 * 1000;
+router.get('/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').slice(0, 200);
+    if (!q) return res.status(400).json({ error: 'q required' });
+    const rows = db
+      .prepare('SELECT id, label, file, started_at, size FROM recordings WHERE user_id = ? ORDER BY id DESC LIMIT 200')
+      .all(req.user.id);
+    const needle = q.toLowerCase();
+    const hits = [];
+    const deadline = Date.now() + SEARCH_DEADLINE_MS;
+    let truncated = false;
+    for (const r of rows) {
+      if (Date.now() > deadline) { truncated = true; break; }
+      const full = path.join(REC_DIR, path.basename(r.file));
+      if (!full.startsWith(REC_DIR) || !fs.existsSync(full)) continue;
+      try {
+        let count = 0, firstTs = null;
+        const rl = readline.createInterface({
+          input: fs.createReadStream(full, { encoding: 'utf8' }),
+          crlfDelay: Infinity,
+        });
+        for await (const line of rl) {
+          if (!line.startsWith('[')) continue;
+          // cheap pre-filter before JSON.parse on every line
+          if (!line.toLowerCase().includes(needle)) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev[1] === 'o' && typeof ev[2] === 'string' && ev[2].toLowerCase().includes(needle)) {
+            count++;
+            if (firstTs === null) firstTs = ev[0];
+          }
         }
-      }
-      if (count) hits.push({ id: r.id, label: r.label, started_at: r.started_at * 1000, hits: count, first_t: firstTs });
-    } catch {}
+        if (count) hits.push({ id: r.id, label: r.label, started_at: r.started_at * 1000, hits: count, first_t: firstTs });
+      } catch {}
+    }
+    res.json({ query: q, results: hits, truncated });
+  } catch (e) {
+    res.status(500).json({ error: 'search failed' });
   }
-  res.json({ query: q, results: hits });
 });
 
 // Raw cast content for the replay player / download.

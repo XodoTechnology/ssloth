@@ -1,26 +1,27 @@
 'use strict';
 
 const crypto = require('crypto');
-const { MASTER_KEY } = require('./config');
+const { MASTER_KEY, MASTER_KEY_OLD } = require('./config');
 
 const { promisify } = require('util');
 const scryptAsync = promisify(crypto.scrypt);
 
-const SCRYPT_N = 16384;
+// N=32768 (~150-300ms per derivation) — verifyPassword reads the params back
+// out of each stored hash, so raising this only affects newly hashed secrets.
+const SCRYPT_N = 32768;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_KEYLEN = 64;
+// OpenSSL's default scrypt memory cap (32MiB) is exactly 128*N*r for these
+// params — raise it so the derivation is allowed at all.
+const SCRYPT_MAXMEM = 128 * SCRYPT_N * SCRYPT_R * 2;
+const SCRYPT_OPTS = { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: SCRYPT_MAXMEM };
 
 // ---- Password hashing (scrypt) ----
-// Async so logins/PIN checks don't stall the event loop (terminal I/O) —
-// N=16384 takes ~50-100ms per derivation.
+// Async so logins/PIN checks don't stall the event loop (terminal I/O).
 async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = await scryptAsync(password, salt, SCRYPT_KEYLEN, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-  });
+  const hash = await scryptAsync(password, salt, SCRYPT_KEYLEN, SCRYPT_OPTS);
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
@@ -34,6 +35,7 @@ async function verifyPassword(password, stored) {
       N: parseInt(n, 10),
       r: parseInt(r, 10),
       p: parseInt(p, 10),
+      maxmem: SCRYPT_MAXMEM,
     });
     return crypto.timingSafeEqual(actual, expected);
   } catch {
@@ -45,11 +47,7 @@ async function verifyPassword(password, stored) {
 // Sync is fine here — it runs once at module load, before the server listens.
 const DUMMY_HASH = (() => {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(crypto.randomBytes(16).toString('hex'), salt, SCRYPT_KEYLEN, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-  });
+  const hash = crypto.scryptSync(crypto.randomBytes(16).toString('hex'), salt, SCRYPT_KEYLEN, SCRYPT_OPTS);
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${hash.toString('base64')}`;
 })();
 
@@ -64,15 +62,66 @@ function encryptSecret(plaintext) {
   return Buffer.concat([iv, tag, ct]).toString('base64');
 }
 
-function decryptSecret(encoded) {
-  if (encoded == null || encoded === '') return null;
-  const buf = Buffer.from(encoded, 'base64');
+function decryptWithKey(buf, key) {
   const iv = buf.subarray(0, 12);
   const tag = buf.subarray(12, 28);
   const ct = buf.subarray(28);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', MASTER_KEY, iv);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+}
+
+function decryptSecret(encoded) {
+  if (encoded == null || encoded === '') return null;
+  const buf = Buffer.from(encoded, 'base64');
+  try {
+    return decryptWithKey(buf, MASTER_KEY);
+  } catch {
+    // Key rotation in progress: SSLOTH_MASTER_KEY_OLD still opens secrets that
+    // haven't been re-encrypted yet.
+    if (MASTER_KEY_OLD) return decryptWithKey(buf, MASTER_KEY_OLD);
+    throw new Error('decrypt failed');
+  }
+}
+
+// Re-encrypt a stored secret under the current MASTER_KEY. Returns
+// { ok: true, value } or { ok: false } when neither key opens it.
+function reencryptSecret(encoded) {
+  if (encoded == null || encoded === '') return { ok: true, value: encoded };
+  try {
+    return { ok: true, value: encryptSecret(decryptSecret(encoded)) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// Boot-time master-key rotation: every encrypted column is re-sealed with the
+// current key. Only runs when SSLOTH_MASTER_KEY_OLD is configured; callers
+// should unset it once this reports zero failures.
+const ENCRYPTED_COLUMNS = [
+  ['credentials', 'secret_enc'],
+  ['hosts', 'password_enc'],
+  ['users', 'totp_secret'],
+  ['users', 'totp_pending_secret'],
+];
+
+function rotateSecrets(db) {
+  let migrated = 0;
+  let failed = 0;
+  for (const [table, col] of ENCRYPTED_COLUMNS) {
+    const rows = db.prepare(`SELECT rowid AS rid, ${col} AS v FROM ${table} WHERE ${col} IS NOT NULL`).all();
+    const upd = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE rowid = ?`);
+    for (const r of rows) {
+      const re = reencryptSecret(r.v);
+      if (re.ok) {
+        upd.run(re.value, r.rid);
+        migrated++;
+      } else {
+        failed++;
+      }
+    }
+  }
+  return { migrated, failed };
 }
 
 // ---- Misc helpers ----
@@ -169,6 +218,8 @@ module.exports = {
   DUMMY_HASH,
   encryptSecret,
   decryptSecret,
+  reencryptSecret,
+  rotateSecrets,
   randomToken,
   sha256,
   sha256B64,

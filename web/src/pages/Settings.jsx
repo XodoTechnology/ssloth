@@ -16,6 +16,7 @@ import {
   KeySquare,
   Zap,
   Radar,
+  Globe,
 } from 'lucide-react';
 import { useRef } from 'react';
 import { api } from '../api';
@@ -48,6 +49,10 @@ export default function Settings() {
   const [scanForm, setScanForm] = useState('');
   const [scanResults, setScanResults] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [keyFilter, setKeyFilter] = useState('');
+  const [netForm, setNetForm] = useState({ enabled: false, port: '8080', bind: '0.0.0.0', allowCidrs: '' });
+  const [netStatus, setNetStatus] = useState(null);
+  const [sessList, setSessList] = useState([]);
   const impFile = useRef(null);
 
   const loadHostkeys = () => api('/api/hosts/hostkeys').then((r) => setHostkeys(r.hostkeys)).catch(() => {});
@@ -55,12 +60,29 @@ export default function Settings() {
     user?.is_admin && api('/api/admin/users').then((r) => setUsers(r.users)).catch(() => {});
   const loadWebhooks = () => api('/api/webhooks').then((r) => setWebhooks(r.webhooks)).catch(() => {});
   const loadTokens = () => api('/api/tokens').then((r) => setTokens(r.tokens)).catch(() => {});
+  const loadNetcfg = () =>
+    desktop &&
+    user?.is_admin &&
+    api('/api/netcfg')
+      .then((r) => {
+        setNetForm({
+          enabled: !!r.config.enabled,
+          port: String(r.config.port || 8080),
+          bind: r.config.bind || '0.0.0.0',
+          allowCidrs: (r.config.allowCidrs || []).join('\n'),
+        });
+        setNetStatus(r.status || null);
+      })
+      .catch(() => {});
+  const loadSessions = () => api('/api/auth/sessions').then((r) => setSessList(r.sessions)).catch(() => {});
 
   useEffect(() => {
     loadHostkeys();
     loadUsers();
     loadWebhooks();
     loadTokens();
+    loadNetcfg();
+    loadSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.is_admin]);
 
@@ -158,14 +180,22 @@ export default function Settings() {
   };
 
   const startTotp = async () => {
-    const r = await api('/api/auth/totp/setup', { method: 'POST' });
-    setTotpSetup(r);
-    setTotpCode('');
+    const pw = prompt('confirm with your password to set up two-factor');
+    if (!pw) return;
+    try {
+      const r = await api('/api/auth/totp/setup', { method: 'POST', body: { password: pw } });
+      setTotpSetup(r);
+      setTotpCode('');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
 
   const enableTotp = async () => {
+    const pw = prompt('confirm with your password to enable two-factor');
+    if (!pw) return;
     try {
-      await api('/api/auth/totp/enable', { method: 'POST', body: { code: totpCode } });
+      await api('/api/auth/totp/enable', { method: 'POST', body: { code: totpCode, password: pw } });
       setTotpSetup(null);
       setUser({ ...user, totp_enabled: true });
       toast('two-factor enabled', 'success');
@@ -190,6 +220,59 @@ export default function Settings() {
     if (!confirm(`Forget trusted key for ${k.hostname}:${k.port}?`)) return;
     await api(`/api/hosts/hostkeys/${k.id}`, { method: 'DELETE' });
     loadHostkeys();
+  };
+
+  const saveNetcfg = async () => {
+    try {
+      const r = await api('/api/netcfg', {
+        method: 'PUT',
+        body: {
+          enabled: netForm.enabled,
+          port: parseInt(netForm.port, 10) || undefined,
+          bind: netForm.bind,
+          allowCidrs: netForm.allowCidrs,
+        },
+      });
+      setNetForm((f) => ({
+        ...f,
+        enabled: r.config.enabled,
+        port: String(r.config.port || f.port),
+        bind: r.config.bind,
+        allowCidrs: r.config.allowCidrs.join('\n'),
+      }));
+      toast('network settings saved', 'success');
+      loadNetcfg(); // pick up listener status
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const revokeSession = async (s) => {
+    try {
+      await api(`/api/auth/sessions/${s.id}`, { method: 'DELETE' });
+      loadSessions();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const revokeOtherSessions = async () => {
+    try {
+      const r = await api('/api/auth/sessions', { method: 'DELETE' });
+      toast(`signed out ${r.revoked} other session(s)`, 'success');
+      loadSessions();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  const setUserLan = async (u, allowed) => {
+    try {
+      await api(`/api/admin/users/${u.id}/lan`, { method: 'POST', body: { allowed } });
+      loadUsers();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
 
   const createUser = async (e) => {
@@ -258,6 +341,27 @@ export default function Settings() {
       toast(`imported ${c.hosts} hosts, ${c.credentials} credentials, ${c.snippets} snippets (${c.skipped} skipped)`, 'success');
     } catch (e2) {
       toast(e2.message, 'error');
+    }
+  };
+
+  // Raw DB snapshot (admin-only endpoint) — a consistent copy for backups,
+  // unlike the per-user sealed export above.
+  const doSnapshot = async () => {
+    try {
+      const r = await fetch('/api/vault/snapshot');
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `ssloth-db-${new Date().toISOString().slice(0, 10)}.db`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('database snapshot downloaded', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
     }
   };
 
@@ -343,6 +447,44 @@ export default function Settings() {
           )}
         </section>
 
+        {/* active sessions */}
+        <section className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <Activity size={15} className="text-emerald-400" /> Signed-in sessions
+            </h2>
+            {sessList.length > 1 && (
+              <button className="btn-ghost border border-ink-700 !py-1 text-xs hover:text-red-400" onClick={revokeOtherSessions}>
+                sign out other sessions
+              </button>
+            )}
+          </div>
+          <div className="divide-y divide-ink-700/50">
+            {sessList.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-zinc-200 truncate">
+                    {s.ua || 'unknown device'}
+                    {s.current && <span className="ml-2 text-[10px] text-emerald-400">this device</span>}
+                  </div>
+                  <div className="text-[11px] text-zinc-500 font-mono">
+                    {s.ip || '—'} · seen {s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : '—'} ·
+                    expires {new Date(s.expires_at).toLocaleDateString()}
+                  </div>
+                </div>
+                {!s.current && (
+                  <button className="btn-ghost !p-1.5 hover:text-red-400" title="revoke this session" onClick={() => revokeSession(s)}>
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
+            ))}
+            {sessList.length === 0 && (
+              <div className="py-4 text-center text-xs text-zinc-600">no active sessions</div>
+            )}
+          </div>
+        </section>
+
         {/* desktop quick PIN */}
         {desktop && (
           <section className="card p-4">
@@ -401,6 +543,80 @@ export default function Settings() {
                 {pinSet ? 'Remove PIN' : 'Set PIN'}
               </button>
             </form>
+          </section>
+        )}
+
+        {/* network / LAN access — desktop only */}
+        {desktop && user?.is_admin && (
+          <section className="card p-4">
+            <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
+              <Globe size={15} className="text-emerald-400" /> Network access (LAN)
+            </h2>
+            <p className="text-[11px] text-zinc-500 mb-3">
+              Off by default — the app only listens on this device. Enable to reach it from
+              other machines on your network (e.g. <span className="font-mono">http://192.168.1.10:8080</span>).
+              Remote sign-in always requires a username + password — the quick PIN stays
+              local-only — and per-account LAN access can be revoked below. Traffic is
+              plain HTTP, so only enable this on networks you trust.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex items-center gap-2 text-sm text-zinc-300 pb-2">
+                <input
+                  type="checkbox"
+                  className="accent-emerald-600"
+                  checked={netForm.enabled}
+                  onChange={(e) => setNetForm((f) => ({ ...f, enabled: e.target.checked }))}
+                />
+                allow network access
+              </label>
+              {netForm.enabled && (
+                <>
+                  <div>
+                    <label className="label">Port</label>
+                    <input
+                      className="input !w-24"
+                      inputMode="numeric"
+                      value={netForm.port}
+                      onChange={(e) => setNetForm((f) => ({ ...f, port: e.target.value.replace(/\D/g, '') }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="label" title="0.0.0.0 = all IPv4 interfaces · :: = all interfaces · or a specific IP">Bind</label>
+                    <input
+                      className="input !w-32 font-mono"
+                      placeholder="0.0.0.0"
+                      value={netForm.bind}
+                      onChange={(e) => setNetForm((f) => ({ ...f, bind: e.target.value.trim() }))}
+                    />
+                  </div>
+                  <div className="flex-1 min-w-52">
+                    <label className="label">Allowed IPs / CIDRs — one per line, blank = any</label>
+                    <input
+                      className="input font-mono !text-[11px]"
+                      placeholder={'192.168.1.0/24\n10.0.0.5'}
+                      value={netForm.allowCidrs}
+                      onChange={(e) => setNetForm((f) => ({ ...f, allowCidrs: e.target.value }))}
+                    />
+                  </div>
+                </>
+              )}
+              <button className="btn-primary !py-1.5 text-xs" onClick={saveNetcfg}>
+                Save
+              </button>
+            </div>
+            {netStatus && (
+              <div className="mt-2 text-[11px] font-mono">
+                {netStatus.listening ? (
+                  <span className="text-emerald-400">listening: {netStatus.address}</span>
+                ) : netForm.enabled && netStatus.error ? (
+                  <span className="text-red-400">listener error: {netStatus.error}</span>
+                ) : netForm.enabled ? (
+                  <span className="text-zinc-500">starting…</span>
+                ) : (
+                  <span className="text-zinc-600">network access off</span>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -471,8 +687,24 @@ export default function Settings() {
           <p className="text-[11px] text-zinc-500 mb-3">
             ssloth pins the SSH host key on first connect (TOFU) and blocks the session if it ever changes.
           </p>
+          {hostkeys.length > 6 && (
+            <input
+              className="input !py-1 !text-xs mb-2"
+              placeholder="filter by host, port, fingerprint…"
+              value={keyFilter}
+              onChange={(e) => setKeyFilter(e.target.value)}
+            />
+          )}
+          {(() => {
+            const q = keyFilter.trim().toLowerCase();
+            const shown = q
+              ? hostkeys.filter((k) =>
+                  `${k.hostname} ${k.port} ${k.fingerprint} ${k.algorithm}`.toLowerCase().includes(q)
+                )
+              : hostkeys;
+            return (
           <div className="divide-y divide-ink-700/50">
-            {hostkeys.map((k) => (
+            {shown.map((k) => (
               <div key={k.id} className="flex items-center gap-3 py-2">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-mono text-zinc-200">
@@ -487,10 +719,14 @@ export default function Settings() {
                 </button>
               </div>
             ))}
-            {hostkeys.length === 0 && (
-              <div className="py-4 text-center text-xs text-zinc-600">no trusted host keys yet</div>
+            {shown.length === 0 && (
+              <div className="py-4 text-center text-xs text-zinc-600">
+                {hostkeys.length === 0 ? 'no trusted host keys yet' : 'no keys match the filter'}
+              </div>
             )}
           </div>
+            );
+          })()}
 
           {/* ssh-keyscan: pre-seed trust before first connect */}
           <div className="mt-3 border-t border-ink-700/60 pt-3">
@@ -623,6 +859,14 @@ export default function Settings() {
               <Upload size={13} /> Import file
             </button>
             <input ref={impFile} type="file" accept=".json" className="hidden" onChange={doImport} />
+            {user?.is_admin && (
+              <>
+                <span className="text-zinc-600">|</span>
+                <button className="btn-ghost border border-ink-700 !py-1.5 text-xs" onClick={doSnapshot} title="Download a consistent copy of the whole database (admin only)">
+                  <Download size={13} /> DB snapshot
+                </button>
+              </>
+            )}
           </div>
           <p className="text-[11px] text-zinc-500 mt-2">
             secrets are sealed with your export passphrase (scrypt + AES-256-GCM) — the file alone can't be opened
@@ -806,6 +1050,20 @@ export default function Settings() {
                     </select>
                   ) : (
                     <span className="text-[10px] uppercase font-semibold text-emerald-400 px-1">{u.role || 'admin'}</span>
+                  )}
+                  {desktop && (
+                    <label
+                      className="flex items-center gap-1 text-[10px] text-zinc-500 cursor-pointer"
+                      title="allow this account to sign in from the network (LAN mode) — the local app is always allowed"
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-emerald-600"
+                        checked={u.lan_allowed !== 0}
+                        onChange={(e) => setUserLan(u, e.target.checked)}
+                      />
+                      LAN
+                    </label>
                   )}
                   <button className="btn-ghost !py-1 text-xs" onClick={() => resetPw(u)}>
                     reset pw

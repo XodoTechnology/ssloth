@@ -18,6 +18,7 @@ import {
   Power,
   Activity,
   Layers,
+  History,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -53,11 +54,35 @@ export default function Sessions() {
   const [sensorHistory, setSensorHistory] = useState([]);
   const [sideView, setSideView] = useState('groups'); // groups|recent|frequent|workspaces
   const [workspaces, setWorkspaces] = useState(null);
+  const [durableSessions, setDurableSessions] = useState([]);
 
   useEffect(() => {
     refreshAll(api).catch((e) => toast(e.message, 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Durable (tmux) sessions that can be resumed — refreshed with the status poll.
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      api('/api/hosts/durable-sessions')
+        .then((r) => alive && setDurableSessions(r.sessions))
+        .catch(() => {});
+    poll();
+    const t = setInterval(poll, 30000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resumeDurable = (s) => {
+    openTab(
+      { hostId: s.host_id, resumeSessionId: s.session_id },
+      s.label || s.host_name || 'durable session'
+    );
+  };
 
   // Live reachability dots (server-side TCP probe, cached ~20s server-side).
   useEffect(() => {
@@ -315,6 +340,35 @@ export default function Sessions() {
     }
   };
 
+  // Host-key monitor flagged a changed key — offer to re-pin the new one
+  // (same trust decision as the connect-time prompt, without a session).
+  const trustChangedKey = async (h, e) => {
+    e.stopPropagation();
+    if (
+      !confirm(
+        `Trust the NEW host key for ${h.hostname}:${h.port}?\n\n` +
+          'Only do this if you expect the change (reinstall, new hardware). ' +
+          'The stored fingerprint will be replaced.'
+      )
+    )
+      return;
+    try {
+      const r = await api('/api/hosts/hostkeys/scan', {
+        method: 'POST',
+        body: { host_ids: [h.id], trust: true },
+      });
+      const res = r.results?.[0];
+      if (res?.ok) {
+        toast(`new host key trusted for ${h.hostname}:${h.port}`, 'success');
+        refreshAll(api);
+      } else {
+        toast(res?.error || 'key scan failed', 'error');
+      }
+    } catch (e2) {
+      toast(e2.message, 'error');
+    }
+  };
+
   const renderHost = (h) => (
     <React.Fragment key={h.id}>
     <div
@@ -345,22 +399,25 @@ export default function Sessions() {
         }
         onClick={(e) => toggleHealth(h, e)}
       />
-      {h.hostkey_status && h.hostkey_status !== 'ok' && (
-        <span
-          className={`h-2 w-2 rounded-full shrink-0 ${
-            h.hostkey_status === 'changed' ? 'bg-red-500 animate-pulse'
-            : h.hostkey_status === 'untrusted' ? 'bg-amber-400'
-            : 'bg-zinc-600'
-          }`}
-          title={
-            h.hostkey_status === 'changed'
-              ? 'HOST KEY CHANGED — possible MITM or reinstall (see audit log)'
-              : h.hostkey_status === 'untrusted'
+      {h.hostkey_status && h.hostkey_status !== 'ok' &&
+        (h.hostkey_status === 'changed' ? (
+          <button
+            className="h-2 w-2 rounded-full shrink-0 bg-red-500 animate-pulse hover:ring-2 hover:ring-red-400/60"
+            title="HOST KEY CHANGED — click to review and trust the new key"
+            onClick={(e) => trustChangedKey(h, e)}
+          />
+        ) : (
+          <span
+            className={`h-2 w-2 rounded-full shrink-0 ${
+              h.hostkey_status === 'untrusted' ? 'bg-amber-400' : 'bg-zinc-600'
+            }`}
+            title={
+              h.hostkey_status === 'untrusted'
                 ? 'host key not yet trusted'
                 : `host-key check: ${h.hostkey_status}`
-          }
-        />
-      )}
+            }
+          />
+        ))}
       <div className="min-w-0 flex-1">
         <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
           {h.name}
@@ -514,6 +571,27 @@ export default function Sessions() {
                 <Clock size={14} />
               </button>
             </form>
+            {durableSessions.length > 0 && (
+              <div className="rounded-md border border-ink-700 bg-ink-900 max-h-40 overflow-y-auto">
+                <div className="px-2.5 py-1 text-[10px] uppercase tracking-wide text-zinc-500 border-b border-ink-700/60 flex items-center gap-1">
+                  <History size={10} /> resumable sessions
+                </div>
+                {durableSessions.map((s) => (
+                  <div
+                    key={s.session_id}
+                    className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-ink-800"
+                    onClick={() => resumeDurable(s)}
+                    title={s.live ? 'session is attached — open takes it over' : 'resume the remote tmux session'}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${s.live ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                    <span className="flex-1 text-[11px] text-zinc-300 truncate">
+                      {s.label || s.host_name || s.session_id.slice(0, 8)}
+                    </span>
+                    <span className="text-[9px] text-zinc-600 shrink-0">{s.live ? 'live' : 'detached'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {quickLog && (
               <div className="rounded-md border border-ink-700 bg-ink-900 max-h-44 overflow-y-auto">
                 {quickLog.entries.length === 0 && (

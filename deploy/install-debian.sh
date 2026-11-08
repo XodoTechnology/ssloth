@@ -22,7 +22,21 @@ mkdir -p "$DIR"; [ "$SRC" != "$DIR" ] && cp -a "$SRC/." "$DIR/"
 chown -R ssloth:ssloth "$DIR"
 
 log "npm install"
-sudo -u ssloth npm ci --prefix "$DIR/server" 2>/dev/null || sudo -u ssloth npm install --prefix "$DIR/server"
+runuser -u ssloth -- npm ci --prefix "$DIR/server" 2>/dev/null || runuser -u ssloth -- npm install --prefix "$DIR/server"
+
+# Secrets live in a 0600 env file, not the unit — unit files are typically
+# world-readable, which would hand the vault key to any local user.
+ENV_FILE="$DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  log "writing $ENV_FILE (fresh master key)"
+  umask 077
+  {
+    echo "SSLOTH_MASTER_KEY=$(openssl rand -hex 32)"
+    echo "PORT=$PORT"
+  } > "$ENV_FILE"
+  chown ssloth:ssloth "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+fi
 
 log "systemd"
 cat > /etc/systemd/system/ssloth.service <<UNIT
@@ -32,8 +46,7 @@ After=network.target
 [Service]
 User=ssloth
 WorkingDirectory=$DIR/server
-Environment=PORT=$PORT
-Environment=SSLOTH_MASTER_KEY=$(openssl rand -hex 32)
+EnvironmentFile=$ENV_FILE
 ExecStart=/usr/bin/node $DIR/server/src/index.js
 Restart=always
 RestartSec=5
@@ -41,4 +54,4 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload; systemctl enable --now ssloth
-log "done — ssloth on :$PORT (master key generated into the unit; rotate via systemctl edit)"
+log "done — ssloth on :$PORT (master key in $ENV_FILE; rotate via systemctl edit)"

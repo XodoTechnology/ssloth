@@ -90,6 +90,7 @@ function resolveConnectSpec(userId, input) {
     protocol: host.protocol || 'ssh',
     agentForward: !!host.agent_forward,
     connectCmd: host.connect_cmd || null,
+    durable: !!host.durable,
   };
 
   if (host.auth_type === 'credential' && host.credential_id) {
@@ -337,14 +338,14 @@ async function establishConn(userId, spec, opts = {}) {
 // session.ws, so closing a tab detaches rather than kills — output keeps
 // buffering in `replay` for reattach. Only an explicit close (or the idle
 // sweep, conn death) destroys the session.
-function createSession(userId, conn, spec) {
+function createSession(userId, conn, spec, preferredId) {
   let mine = 0;
   for (const s of sessions.values()) if (s.userId === userId) mine++;
   if (mine >= MAX_SESSIONS_PER_USER) {
     try { conn.end(); } catch {}
     throw Object.assign(new Error(`session limit reached (${MAX_SESSIONS_PER_USER} per user)`), { code: 'error' });
   }
-  const id = crypto.randomBytes(16).toString('hex');
+  const id = preferredId || crypto.randomBytes(16).toString('hex');
   const session = {
     id,
     userId,
@@ -539,6 +540,16 @@ function destroySession(sessionId) {
   }
   s.viewers.clear();
   try { db.prepare('DELETE FROM shares WHERE session_id = ?').run(sessionId); } catch {}
+  // Durable sessions: the tmux session lives on the remote host — kill it and
+  // drop the registry row so it can't be resurrected after an explicit close.
+  if (s.tmuxName) {
+    try { db.prepare('DELETE FROM ssh_sessions WHERE session_id = ?').run(sessionId); } catch {}
+    try {
+      if (s.conn && !s.conn._sock?.destroyed) {
+        s.conn.exec(`tmux kill-session -t ${s.tmuxName}`, () => {});
+      }
+    } catch {}
+  }
   try { s.conn.end(); } catch {}
 }
 

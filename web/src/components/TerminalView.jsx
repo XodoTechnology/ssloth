@@ -15,6 +15,7 @@ import {
   FileDown,
   Play,
   Power,
+  Lock,
 } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
@@ -362,6 +363,12 @@ export default function TerminalView({ tab, active }) {
         </button>
       </div>
 
+      {isTelnet && (
+        <div className="px-3 py-1 text-[11px] bg-amber-950/60 text-amber-300 border-b border-amber-900/50 shrink-0">
+          Telnet is unencrypted — everything you type, including passwords, crosses the network in cleartext.
+        </div>
+      )}
+
       {showSearch && (
         <div className="flex items-center gap-1 px-2 py-1 border-b border-ink-800 bg-ink-900/40 shrink-0">
           <input
@@ -483,6 +490,7 @@ export default function TerminalView({ tab, active }) {
 function ShareModal({ sessionId, label, onClose }) {
   const [mode, setMode] = useState('view');
   const [ttl, setTtl] = useState(60);
+  const [sharePw, setSharePw] = useState('');
   const [shares, setShares] = useState([]);
   const [freshUrl, setFreshUrl] = useState('');
   const [busy, setBusy] = useState(false);
@@ -503,7 +511,7 @@ function ShareModal({ sessionId, label, onClose }) {
     try {
       const r = await api('/api/shares', {
         method: 'POST',
-        body: { session_id: sessionId, mode, ttl_minutes: ttl },
+        body: { session_id: sessionId, mode, ttl_minutes: ttl, password: sharePw || undefined },
       });
       const full = `${location.origin}${r.share.url}`;
       setFreshUrl(full);
@@ -552,6 +560,17 @@ function ShareModal({ sessionId, label, onClose }) {
             </select>
           </div>
         </div>
+        <div>
+          <label className="label">Password (optional)</label>
+          <input
+            className="input"
+            type="password"
+            autoComplete="off"
+            placeholder="leave blank — anyone with the link can open it"
+            value={sharePw}
+            onChange={(e) => setSharePw(e.target.value)}
+          />
+        </div>
         <button className="btn-primary w-full justify-center" onClick={create} disabled={busy}>
           {busy ? '…' : 'Generate ephemeral link'}
         </button>
@@ -596,6 +615,11 @@ function ShareModal({ sessionId, label, onClose }) {
                 >
                   {s.mode === 'control' ? 'interactive' : 'view'}
                 </span>
+                {s.has_password && (
+                  <span className="text-zinc-500" title="password protected">
+                    <Lock size={11} />
+                  </span>
+                )}
                 <span className="text-[11px] text-zinc-500">expires {new Date(s.expires_at).toLocaleTimeString()}</span>
                 <span className="flex-1" />
                 <button className="p-1 text-zinc-500 hover:text-red-400" title="Revoke" onClick={() => revoke(s.id)}>

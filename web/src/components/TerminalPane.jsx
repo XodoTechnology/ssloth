@@ -255,8 +255,11 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
 
     ws.onopen = () => {
       const { cols, rows } = term || { cols: 80, rows: 24 };
-      if (sessionRef.current) {
-        ws.send(JSON.stringify({ type: 'reattach', sessionId: sessionRef.current, cols, rows }));
+      // sessionRef covers reconnects; target.resumeSessionId covers opening a
+      // tab straight onto a durable session that outlived a restart/refresh.
+      const sid = sessionRef.current || pane.target?.resumeSessionId;
+      if (sid) {
+        ws.send(JSON.stringify({ type: 'reattach', sessionId: sid, cols, rows }));
       } else {
         ws.send(JSON.stringify({ type: 'connect', ...pane.target, cols, rows }));
       }
@@ -298,11 +301,12 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
           setHostkey(msg);
           break;
         case 'hostkey_mismatch':
-          // changed server key — surface as a hard stop, never auto-retry
-          fatalRef.current = true;
+          // changed server key — same verify modal as first-seen, flagged
+          // as a change; the socket stays open until the user decides.
           sessionRef.current = null;
           reattachRef.current = false;
-          setPaneState({ status: 'error', statusMsg: msg.message || 'HOST KEY CHANGED', sessionId: null, mismatch: msg });
+          setPaneState({ status: 'connecting', statusMsg: `host key changed for ${msg.hostname}` });
+          setHostkey({ ...msg, changed: true });
           break;
         case 'auth_request':
           setPassword('');
@@ -381,6 +385,14 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
   };
 
+  // Rejecting a key prompt is a user decision — mark fatal so the socket
+  // close doesn't schedule an auto-reconnect that would just re-prompt.
+  const rejectKey = () => {
+    fatalRef.current = true;
+    sendJson({ type: 'trust', accept: 'reject' });
+    setHostkey(null);
+  };
+
   return (
     <div
       className="relative flex-1 min-w-0 min-h-0 w-full h-full"
@@ -420,46 +432,67 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
 
       {hostkey && (
         <Modal
-          title={`Verify host key${hostkey.hop === 'jump' ? ' (bastion hop)' : ''}`}
-          onClose={() => {
-            sendJson({ type: 'trust', accept: 'reject' });
-            setHostkey(null);
-          }}
+          title={hostkey.changed ? 'Host key changed' : `Verify host key${hostkey.hop === 'jump' ? ' (bastion hop)' : ''}`}
+          onClose={rejectKey}
         >
           <div className="space-y-3">
-            <div className="flex items-start gap-2 text-amber-300 text-sm">
-              <ShieldAlert size={18} className="shrink-0 mt-0.5" />
-              <p>
-                First time connecting to{' '}
-                <span className="font-mono">
-                  {hostkey.hostname}:{hostkey.port}
-                </span>
-                {hostkey.hop === 'jump' && ' (bastion)'}. Verify this fingerprint before trusting.
-              </p>
-            </div>
-            <div className="rounded-md bg-ink-900 border border-ink-700 p-3 font-mono text-xs space-y-1">
-              <div className="text-zinc-500">{hostkey.algorithm || 'ssh key'}</div>
-              <div className="text-emerald-300 break-all">{hostkey.fingerprint}</div>
-            </div>
+            {hostkey.changed ? (
+              <>
+                <div className="flex items-start gap-2 text-red-300 text-sm">
+                  <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+                  <p>
+                    The host key for{' '}
+                    <span className="font-mono">
+                      {hostkey.hostname}:{hostkey.port}
+                    </span>
+                    {hostkey.hop === 'jump' && ' (bastion)'} changed. This can be a man-in-the-middle
+                    attack — only trust the new key if you expect the change (reinstall, new hardware).
+                  </p>
+                </div>
+                <div className="rounded-md bg-ink-900 border border-ink-700 p-3 font-mono text-xs space-y-1.5">
+                  <div>
+                    <div className="text-zinc-500">stored (expected)</div>
+                    <div className="text-zinc-400 break-all line-through decoration-red-500/60">{hostkey.expected}</div>
+                  </div>
+                  <div>
+                    <div className="text-zinc-500">presented now{hostkey.algorithm ? ` — ${hostkey.algorithm}` : ''}</div>
+                    <div className="text-emerald-300 break-all">{hostkey.fingerprint}</div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-start gap-2 text-amber-300 text-sm">
+                  <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+                  <p>
+                    First time connecting to{' '}
+                    <span className="font-mono">
+                      {hostkey.hostname}:{hostkey.port}
+                    </span>
+                    {hostkey.hop === 'jump' && ' (bastion)'}. Verify this fingerprint before trusting.
+                  </p>
+                </div>
+                <div className="rounded-md bg-ink-900 border border-ink-700 p-3 font-mono text-xs space-y-1">
+                  <div className="text-zinc-500">{hostkey.algorithm || 'ssh key'}</div>
+                  <div className="text-emerald-300 break-all">{hostkey.fingerprint}</div>
+                </div>
+              </>
+            )}
             <div className="flex justify-end gap-2">
-              <button
-                className="btn-ghost"
-                onClick={() => {
-                  sendJson({ type: 'trust', accept: 'reject' });
-                  setHostkey(null);
-                }}
-              >
-                Reject
+              <button className="btn-ghost" onClick={rejectKey}>
+                {hostkey.changed ? 'Keep old key' : 'Reject'}
               </button>
-              <button
-                className="btn-ghost border border-ink-600"
-                onClick={() => {
-                  sendJson({ type: 'trust', accept: 'once' });
-                  setHostkey(null);
-                }}
-              >
-                Trust once
-              </button>
+              {!hostkey.changed && (
+                <button
+                  className="btn-ghost border border-ink-600"
+                  onClick={() => {
+                    sendJson({ type: 'trust', accept: 'once' });
+                    setHostkey(null);
+                  }}
+                >
+                  Trust once
+                </button>
+              )}
               <button
                 className="btn-primary"
                 onClick={() => {
@@ -467,7 +500,7 @@ export default function TerminalPane({ tab, pane, active, focused, onFocus, onPa
                   setHostkey(null);
                 }}
               >
-                Trust always
+                {hostkey.changed ? 'Trust new key' : 'Trust always'}
               </button>
             </div>
           </div>

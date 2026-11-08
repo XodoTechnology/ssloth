@@ -25,15 +25,17 @@ const fs = require('fs');
 const path = require('path');
 const { audit } = require('../db');
 const { resolveConnectSpec } = require('../ssh/manager');
+const { DATA_DIR } = require('../config');
+const { assertPublicHost } = require('../notify');
 
 // The vendored bmc-core napi addon, shared with the BMC host-command routes.
-const { bmc, bmcError, applyRoutes, chainToRoutes } = require('../bmc');
+const { bmc, bmcError, applyRoutes, releaseRoute } = require('../bmc');
 
 // Persistent sessions, same model as ssh: detach keeps the console alive —
 // but a *detached* console dies on the same TTL ssh uses, and each user is
 // capped, so a wedged BMC can't leak bastion tunnels forever.
 const sessions = new Map(); // id -> {id, bmc, ws, label, createdAt}
-const MEDIA_DIR = path.join(__dirname, '..', '..', 'data', 'media');
+const MEDIA_DIR = path.join(DATA_DIR, 'media');
 const MAX_KVM_PER_USER = 8;
 const KVM_DETACHED_TTL_MS = 60 * 60 * 1000;
 let seq = 0;
@@ -51,6 +53,10 @@ function killSession(s) {
   if (!s) return;
   sessions.delete(s.id);
   if (s.takeoverPoll) clearInterval(s.takeoverPoll);
+  if (s.routeAddr) {
+    try { releaseRoute(s.routeAddr, s.routeHolder); } catch {}
+    s.routeAddr = null;
+  }
   for (const v of s.viewers || []) {
     try { send(v.ws, { type: 'status', state: 'closed', message: 'console ended' }); v.ws.close(); } catch {}
   }
@@ -101,6 +107,29 @@ function pushTakeover(s) {
 // {type:'op', op:'mount'|'power', phase:'start'|'stage'|'done'|'error', message}
 function op(ws, name, phase, message) {
   send(ws, { type: 'op', op: name, phase, message });
+}
+
+// Media mount specs are user input reaching the server's filesystem and
+// network: a local path is served to the BMC as a block device (any file the
+// server can read — master.key, the db — would land on the guest console),
+// and a URL is fetched server-side (SSRF, incl. via redirects the fetcher
+// follows). Local mounts are therefore limited to files staged by the
+// authenticated media-upload endpoint under MEDIA_DIR; URLs must resolve to
+// public addresses unless SSLOTH_ALLOW_PRIVATE_MEDIA_URLS opts out (the
+// addon's fetcher enforces the same rule at connect time).
+const MEDIA_URLS = process.env.SSLOTH_ALLOW_PRIVATE_MEDIA_URLS === 'true';
+async function validateMountSpec(spec) {
+  if (/^https?:\/\//i.test(spec)) {
+    if (!MEDIA_URLS && !(await assertPublicHost(spec))) {
+      return 'media URL must resolve to a public address';
+    }
+    return null;
+  }
+  const resolved = path.resolve(spec);
+  if (!resolved.startsWith(MEDIA_DIR + path.sep)) {
+    return 'local media must be a file uploaded through the host media endpoint';
+  }
+  return null;
 }
 
 function handleKvmWs(ws, req, user) {
@@ -166,15 +195,18 @@ function handleKvmWs(ws, req, user) {
           break;
         }
         case 'mount': {
-          // spec: server-side path or http(s) URL — async; stages land as
-          // {type:'op'} + notices from the core's own sink
-          const spec = String(msg.spec || '');
+          // spec: staged file under data/media or a public http(s) URL —
+          // async; stages land as {type:'op'} + notices from the core's sink
+          const spec = String(msg.spec || '').trim();
           if (session && spec) {
-            // A staged file under data/media is ours to clean up on kill.
-            if (spec.startsWith(MEDIA_DIR + path.sep)) session.mediaFiles.add(spec);
             op(ws, 'mount', 'start', 'attaching media…');
-            session.bmc
-              .mountMedia(spec)
+            validateMountSpec(spec)
+              .then((err) => {
+                if (err) throw new Error(err);
+                // A staged file under data/media is ours to clean up on kill.
+                if (spec.startsWith(MEDIA_DIR + path.sep)) session.mediaFiles.add(spec);
+                return session.bmc.mountMedia(spec);
+              })
               .then((m) => {
                 op(ws, 'mount', 'done', String(m));
                 send(ws, { type: 'status', state: 'notice', message: String(m) });
@@ -241,9 +273,22 @@ function handleKvmWs(ws, req, user) {
     session = null;
   });
 
+  // Input flood guard: legit KVM input is ~100 msg/s (pointer moves dominate);
+  // a scripted client can otherwise push unbounded input events into the BMC.
+  // 5000/s is far above human input — this only trips on abuse.
+  let inputWindowStart = 0;
+  let inputCount = 0;
+  const INPUT_LIMIT_PER_SEC = 5000;
+
   // Input is best-effort: a pre-ready key or a dead channel is a notice,
   // never the fatal 'error' status that ends the session client-side.
   function sendInput(fn) {
+    const now = Date.now();
+    if (now - inputWindowStart >= 1000) {
+      inputWindowStart = now;
+      inputCount = 0;
+    }
+    if (++inputCount > INPUT_LIMIT_PER_SEC) return;
     try {
       if (session) fn();
     } catch (e) {
@@ -272,18 +317,22 @@ function handleKvmWs(ws, req, user) {
     }
     send(ws, { type: 'status', state: 'connecting', message: `connecting to ${spec.label} …` });
 
-    // Bastion chain → bmc route table (installed globally by addr).
+    const id = `kvm${++seq}-${Date.now().toString(36)}`;
+    const routeHolder = `kvm:${id}`;
+    // Bastion chain → bmc route table (global, keyed by addr — the holder
+    // registry in bmc.js refuses a conflicting chain for the same address).
     try {
-      applyRoutes(resolveConnectSpec, user.id, spec);
+      applyRoutes(resolveConnectSpec, user.id, spec, { id: routeHolder });
     } catch (e) {
       send(ws, { type: 'status', state: 'error', message: 'route setup failed: ' + e.message });
       return;
     }
 
-    const id = `kvm${++seq}-${Date.now().toString(36)}`;
     // napi ThreadsafeFunction callbacks fire as (err, value) — the payload
     // is the second arg, not the first.
-    const b = new bmc.BmcSession(
+    let b;
+    try {
+      b = new bmc.BmcSession(
       { host: spec.hostname, user: spec.username || '', pass, seize: !!msg.seize },
       (_err, line) => onEvent(String(line ?? '')),
       (_err, frame) => {
@@ -295,12 +344,19 @@ function handleKvmWs(ws, req, user) {
         for (const v of s.viewers) if (v.ws.readyState === 1) v.ws.send(buf);
       }
     );
+    } catch (e) {
+      try { releaseRoute(spec.hostname, routeHolder); } catch {}
+      send(ws, { type: 'status', state: 'error', message: `console failed: ${e.message}` });
+      return;
+    }
 
     const rec = {
       id,
       bmc: b,
       ws,
       userId: user.id,
+      routeAddr: spec.hostname,
+      routeHolder,
       label: spec.label,
       family: null,
       spec: { host: spec.hostname, user: spec.username || '', pass },
@@ -336,7 +392,10 @@ function handleKvmWs(ws, req, user) {
       } else if (kind === 'progress') {
         fan({ type: 'status', state: 'connecting', message: body });
       } else if (kind === 'error') {
+        // Connect failures are terminal — the console never adopted, so
+        // free the session (and its route holder) instead of leaking it.
         fan({ type: 'status', state: 'error', message: body });
+        killSession(s);
       } else if (kind === 'ended') {
         fan({ type: 'status', state: 'closed', message: 'console ended' });
         killSession(s);

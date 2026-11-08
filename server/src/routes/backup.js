@@ -2,9 +2,12 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { db } = require('../db');
 const { encryptSecret, decryptSecret } = require('../crypto');
-const { auditReq } = require('../auth');
+const { auditReq, requireAdmin } = require('../auth');
+const { DATA_DIR } = require('../config');
 
 const router = express.Router();
 
@@ -352,6 +355,34 @@ router.post('/import', async (req, res) => {
     `${counts.hosts} hosts, ${counts.credentials} credentials, ${counts.snippets} snippets, ${counts.playbooks} playbooks, ${counts.tunnels} tunnels (${counts.skipped} skipped)`
   );
   res.json({ imported: counts });
+});
+
+// ---- Consistent DB snapshot (admin only) ----
+// GET /api/vault/snapshot — the whole database (all users' rows; secrets stay
+// master-key encrypted). better-sqlite3's backup API handles the WAL correctly
+// and doesn't block writers the way a file copy of a live db would.
+router.get('/snapshot', requireAdmin, async (req, res) => {
+  const dir = path.join(DATA_DIR, 'snapshots');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const name = `ssloth-snapshot-${Date.now()}.db`;
+  const file = path.join(dir, name);
+  try {
+    await db.backup(file);
+  } catch (e) {
+    fs.rmSync(file, { force: true });
+    console.error('[ssloth] snapshot failed:', e);
+    return res.status(500).json({ error: 'snapshot failed' });
+  }
+  auditReq(req, 'vault.snapshot', name);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  const stream = fs.createReadStream(file);
+  stream.on('close', () => fs.rmSync(file, { force: true }));
+  stream.on('error', () => {
+    fs.rmSync(file, { force: true });
+    if (!res.headersSent) res.status(500).end();
+  });
+  stream.pipe(res);
 });
 
 module.exports = router;

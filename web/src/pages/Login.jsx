@@ -1,25 +1,38 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Delete } from 'lucide-react';
+import { ShieldCheck, Delete, KeyRound } from 'lucide-react';
 import { api } from '../api';
 import { useStore } from '../store';
 
 function PinPad({ onUnlock }) {
   const [pin, setPin] = useState('');
+  const [totp, setTotp] = useState('');
+  const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const { setUser } = useStore();
 
-  const unlock = async (value) => {
+  const unlock = async (value, code) => {
     if (busy || value.length < 4) return;
     setBusy(true);
     setError('');
     try {
-      const r = await api('/api/auth/pin', { method: 'POST', body: { pin: value } });
+      const r = await api('/api/auth/pin', {
+        method: 'POST',
+        body: { pin: value, totp: code || totp || undefined },
+      });
       setUser(r.user);
       onUnlock?.();
     } catch (e) {
-      setError(e.message);
-      setPin('');
+      if (e.totp_required) {
+        // PIN was right — collect the second factor, then resubmit.
+        setNeedTotp(true);
+        setError(e.message);
+      } else {
+        setError(e.message);
+        setPin('');
+        setTotp('');
+        setNeedTotp(false);
+      }
     } finally {
       setBusy(false);
     }
@@ -52,6 +65,21 @@ function PinPad({ onUnlock }) {
           {error}
         </div>
       )}
+      {needTotp && (
+        <div>
+          <label className="label">Authenticator code</label>
+          <input
+            className="input text-center font-mono tracking-[0.3em]"
+            inputMode="numeric"
+            autoFocus
+            maxLength={6}
+            placeholder="123456"
+            value={totp}
+            onChange={(e) => setTotp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && totp.length === 6) unlock(pin, totp); }}
+          />
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-2 max-w-[220px] mx-auto">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) => (
           <button
@@ -65,8 +93,8 @@ function PinPad({ onUnlock }) {
         ))}
         <button
           type="button"
-          onClick={() => unlock(pin)}
-          disabled={pin.length < 4 || busy}
+          onClick={() => unlock(pin, totp)}
+          disabled={pin.length < 4 || busy || (needTotp && totp.length !== 6)}
           className="h-12 rounded-md bg-emerald-900/60 text-emerald-300 hover:bg-emerald-800/60 disabled:opacity-40 flex items-center justify-center"
         >
           ✓
@@ -86,7 +114,9 @@ function PinPad({ onUnlock }) {
           <Delete size={18} />
         </button>
       </div>
-      <p className="text-center text-[11px] text-zinc-600">4–8 digits — press ✓ (or it submits at 8)</p>
+      <p className="text-center text-[11px] text-zinc-600">
+        {needTotp ? 'enter the 6-digit code, then press ✓' : '4–8 digits — press ✓ (or it submits at 8)'}
+      </p>
     </div>
   );
 }
@@ -97,10 +127,11 @@ export default function Login({ setupMode }) {
   const [totp, setTotp] = useState('');
   const [needTotp, setNeedTotp] = useState(false);
   const [usePassword, setUsePassword] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(() => new URLSearchParams(window.location.search).get('oidc_error') || '');
   const [busy, setBusy] = useState(false);
   const { setUser, toast } = useStore();
   const pinMode = useStore((s) => s.desktop && s.pinSet && !setupMode);
+  const oidc = useStore((s) => s.oidc);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -180,6 +211,16 @@ export default function Login({ setupMode }) {
           <div className="flex items-center justify-center gap-1.5 text-[11px] text-zinc-600">
             <ShieldCheck size={12} /> credentials stay encrypted on this server
           </div>
+          {oidc && !setupMode && (
+            <>
+              <div className="flex items-center gap-2 text-[11px] text-zinc-600">
+                <span className="flex-1 border-t border-ink-700" /> or <span className="flex-1 border-t border-ink-700" />
+              </div>
+              <a href="/api/auth/oidc/login" className="btn-ghost w-full justify-center border border-ink-600">
+                <KeyRound size={14} /> Sign in with SSO
+              </a>
+            </>
+          )}
         </form>
         )}
         {pinMode && (

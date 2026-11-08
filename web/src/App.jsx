@@ -32,6 +32,7 @@ export default function App() {
           setupRequired: s.setup_required,
           desktop: !!s.desktop,
           pinSet: !!s.pin_set,
+          oidc: !!s.oidc,
           version: s.version,
           commit: s.commit,
           buildDate: s.build_date,
