@@ -17,7 +17,7 @@
 pub mod kvm;
 pub mod vmedia;
 
-use native_tls::TlsConnector;
+use openssl::ssl::{SslConnector, SslMethod, SslOptions, SslStream, SslVerifyMode, SslVersion};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -27,15 +27,32 @@ pub const KVM_PORT: u16 = 7578;
 /// AMI virtual-media (CD/FD/HD redirection) port.
 pub const VMEDIA_PORT: u16 = 5120;
 
-fn tls(host: &str) -> std::io::Result<native_tls::TlsStream<TcpStream>> {
-    let c = TlsConnector::builder()
-        .danger_accept_invalid_certs(true)
-        .danger_accept_invalid_hostnames(true)
-        .build()
-        .map_err(oerr)?;
+/// This 2009-era GoAhead firmware negotiates TLS 1.0 with RSA key exchange
+/// (AES256-SHA) and a self-signed certificate — below OpenSSL 3's default
+/// floor, so `native_tls` cannot complete the handshake at all and every
+/// HTTPS probe silently fails (the host then misdetects as ATEN). Same answer
+/// as the Avocent family: exclude DHE — its parameters are below the floor
+/// too — and drop the security level; RSA key exchange is what the vendor
+/// Java client negotiates anyway.
+const CIPHERS: &str = "DEFAULT:!DH:!kDHE:@SECLEVEL=0";
+
+fn tls(host: &str) -> std::io::Result<SslStream<TcpStream>> {
+    let mut b = SslConnector::builder(SslMethod::tls_client()).map_err(oerr)?;
+    b.set_verify(SslVerifyMode::NONE);
+    b.set_cipher_list(CIPHERS).map_err(oerr)?;
+    b.set_min_proto_version(Some(SslVersion::TLS1)).map_err(oerr)?;
+    b.set_options(SslOptions::ALLOW_UNSAFE_LEGACY_RENEGOTIATION);
     let tcp = crate::net::connect(host, 443, None)?;
     tcp.set_read_timeout(Some(Duration::from_secs(6))).ok();
-    c.connect(host, tcp).map_err(oerr)
+    b.build()
+        .configure()
+        .map_err(oerr)?
+        .verify_hostname(false)
+        // The BMC has no SNI name; the extension only invites a different,
+        // equally wrong, certificate.
+        .use_server_name_indication(false)
+        .connect(host, tcp)
+        .map_err(oerr)
 }
 
 fn https(host: &str, request: &str) -> std::io::Result<(String, String)> {
