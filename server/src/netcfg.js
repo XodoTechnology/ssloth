@@ -174,7 +174,10 @@ function lanActive() {
 }
 
 function clientIp(req) {
-  return req.ip || req.socket?.remoteAddress || '';
+  // Security decisions (loopback auto-auth, IP allowlist) must use the real
+  // peer address. req.ip honors X-Forwarded-For when TRUST_PROXY is set and
+  // is trivially spoofable — a forged "127.0.0.1" would bypass both checks.
+  return req.socket?.remoteAddress || req.ip || '';
 }
 
 function isLoopbackClient(req) {

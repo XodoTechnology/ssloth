@@ -95,16 +95,28 @@ router.get('/:sid/read', async (req, res) => {
   if (!ctx) return;
   const p = cleanPathParam(req.query.path);
   if (p === null || p === '.') return res.status(400).json({ error: 'bad path' });
+  let fileSize = 0;
   try {
     const st = await pStat(ctx.sftp, p);
+    fileSize = st.size;
     if ((st.mode & S_IFMT) === S_IFDIR) return res.status(400).json({ error: 'cannot read a directory' });
     if (st.size > READ_CAP) {
       return res.json({ path: p, size: st.size, binary: true, too_large: true });
     }
     const buf = await new Promise((resolve, reject) => {
       const chunks = [];
+      let total = 0;
       const rs = ctx.sftp.createReadStream(p);
-      rs.on('data', (c) => chunks.push(c));
+      rs.on('data', (c) => {
+        total += c.length;
+        // The stat check above races a file that keeps growing — enforce the
+        // cap on actual bytes too so memory stays bounded.
+        if (total > READ_CAP) {
+          rs.destroy();
+          return reject(Object.assign(new Error('file exceeds read cap'), { code: 'too_large' }));
+        }
+        chunks.push(c);
+      });
       rs.on('error', reject);
       rs.on('end', () => resolve(Buffer.concat(chunks)));
     });
@@ -112,6 +124,9 @@ router.get('/:sid/read', async (req, res) => {
     auditReq(req, 'sftp.read', `${ctx.session.label}:${p}`);
     res.json({ path: p, size: buf.length, binary: false, content: buf.toString('utf8') });
   } catch (e) {
+    if (e?.code === 'too_large') {
+      return res.json({ path: p, size: fileSize, binary: true, too_large: true });
+    }
     sftpError(res, e, 'read failed');
   }
 });
@@ -241,6 +256,7 @@ router.post('/:sid/mkdir', json, async (req, res) => {
   if (p === null) return res.status(400).json({ error: 'bad path' });
   try {
     await pMkdir(ctx.sftp, p);
+    auditReq(req, 'sftp.mkdir', `${ctx.session.label}:${p}`);
     res.json({ ok: true });
   } catch (e) {
     sftpError(res, e, 'mkdir failed');
@@ -255,6 +271,7 @@ router.post('/:sid/rename', json, async (req, res) => {
   if (from === null || to === null) return res.status(400).json({ error: 'bad path' });
   try {
     await pRename(ctx.sftp, from, to);
+    auditReq(req, 'sftp.rename', `${ctx.session.label}:${from} -> ${to}`);
     res.json({ ok: true });
   } catch (e) {
     sftpError(res, e, 'rename failed');
@@ -274,6 +291,7 @@ router.post('/:sid/delete', json, async (req, res) => {
       if ((st.mode & S_IFMT) === S_IFDIR) await pRmdir(ctx.sftp, p);
       else await pUnlink(ctx.sftp, p);
     }
+    auditReq(req, 'sftp.delete', `${ctx.session.label}:${p}${req.body?.recursive ? ' (recursive)' : ''}`);
     res.json({ ok: true });
   } catch (e) {
     sftpError(res, e, 'delete failed');

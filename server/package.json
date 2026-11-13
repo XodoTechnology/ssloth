@@ -1,6 +1,6 @@
 {
   "name": "ssloth-server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "ssloth backend - secure web SSH portal",
   "main": "src/index.js",

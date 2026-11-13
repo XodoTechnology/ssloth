@@ -52,9 +52,17 @@ function showAbout() {
   });
 }
 
+// Logs append forever otherwise — rotate to a single .1 generation past 10MB.
+const LOG_CAP = 10 * 1024 * 1024;
+function appendLog(file) {
+  try {
+    if (fs.statSync(file).size > LOG_CAP) fs.renameSync(file, `${file}.1`);
+  } catch {}
+  return fs.createWriteStream(file, { flags: 'a' });
+}
+
 // Update events get appended here so failures are diagnosable after the fact.
-const updateLog = () =>
-  fs.createWriteStream(path.join(app.getPath('userData'), 'update.log'), { flags: 'a' });
+const updateLog = () => appendLog(path.join(app.getPath('userData'), 'update.log'));
 
 function initUpdater() {
   // Only packaged builds self-update; dev mode has no feed to check.
@@ -156,7 +164,7 @@ function startServer() {
   return new Promise((resolve, reject) => {
     const { entry, cwd, node } = serverPaths();
     const logFile = path.join(app.getPath('userData'), 'server.log');
-    const log = fs.createWriteStream(logFile, { flags: 'a' });
+    const log = appendLog(logFile);
 
     if (node && !fs.existsSync(node)) {
       return reject(new Error(`bundled runtime missing at ${node} — the install is incomplete; please reinstall or use the portable zip`));

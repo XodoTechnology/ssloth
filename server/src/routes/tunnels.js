@@ -124,10 +124,16 @@ router.post('/:id/start', async (req, res) => {
         socket.on('error', () => stream.destroy());
       });
     });
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(t.local_port, t.bind_address, resolve);
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(t.local_port, t.bind_address, resolve);
+      });
+    } catch (e) {
+      // Port already bound etc. — don't leak the SSH connection we just made.
+      try { conn.end(); } catch {}
+      throw e;
+    }
     conn.on('close', () => stopTunnel(t.id));
     active.set(t.id, { server, conn, userId: t.user_id, hostId: t.host_id });
     const via =
@@ -150,6 +156,9 @@ function handleSocks5(conn, socket) {
   const fail = () => socket.destroy();
   const onData = (data) => {
     buf = Buffer.concat([buf, data]);
+    // The whole handshake is a few hundred bytes — a peer that stalls
+    // mid-negotiation would otherwise grow this buffer without bound.
+    if (buf.length > 4096) return fail();
     try {
       parse();
     } catch {

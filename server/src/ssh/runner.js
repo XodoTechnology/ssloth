@@ -28,10 +28,10 @@ function fieldMatch(p, val, lo, hi, isDow) {
     const b = m[2] !== undefined ? +m[2] : m[1] === '*' ? hi : +m[1];
     const step = +m[3] || 1;
     if (a < lo || b > hi || a > b) return false;
-    // sunday normalization: both 0 and 7 are valid
-    const vv = isDow && val === 0 ? 7 : val;
-    const inRange = (val >= a && val <= b) || (isDow && vv >= a && vv <= b);
-    return inRange && (val - a) % step === 0;
+    // Day-of-week names Sunday twice (0 and 7): a pattern anchored at either
+    // spelling must match, so test both representations of val === 0.
+    const vals = isDow && val === 0 ? [0, 7] : [val];
+    return vals.some((v) => v >= a && v <= b && (v - a) % step === 0);
   });
 }
 
@@ -56,6 +56,13 @@ function nextCron(expr, from = Date.now()) {
   // minute-by-minute scan would take ~500k iterations to find a monthly run.
   const parts = String(expr || '').trim().split(/\s+/);
   if (parts.length !== 5) return null;
+  // Bail before the day scan if a time field can't match anything —
+  // otherwise e.g. '61 * * * *' would iterate ~2M minute candidates.
+  const timePossible = (part, lo, hi) => {
+    for (let v = lo; v <= hi; v++) if (fieldMatch(part, v, lo, hi, false)) return true;
+    return false;
+  };
+  if (!timePossible(parts[0], 0, 59) || !timePossible(parts[1], 0, 23)) return null;
   const day0 = new Date(from);
   for (let d = 0; d < 4 * 366; d++) {
     // new Date(y,m,dom+d) handles month rollover AND DST-odd days correctly.

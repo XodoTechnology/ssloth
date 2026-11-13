@@ -81,17 +81,35 @@ router.post('/', (req, res) => {
   res.json({ credential: credView(row), public_key: publicKey });
 });
 
+// Key generation is CPU-heavy (RSA-8192 can take seconds) — cap it per user
+// so a scripted caller can't pin a core. 30/hour is generous for real use.
+const genWindows = new Map(); // userId -> { count, resetAt }
+const GEN_LIMIT = 30;
+const GEN_WINDOW_MS = 60 * 60 * 1000;
+
 // Generate a fresh key pair (ed25519 or rsa) server-side.
 router.post('/generate', (req, res) => {
   const { name, keyType = 'ed25519', bits, passphrase, comment } = req.body || {};
   if (!name || String(name).trim().length === 0) return res.status(400).json({ error: 'name required' });
   if (!['ed25519', 'rsa'].includes(keyType)) return res.status(400).json({ error: 'keyType must be ed25519 or rsa' });
+  const now = Date.now();
+  const w = genWindows.get(req.user.id);
+  if (w && w.resetAt > now && w.count >= GEN_LIMIT) {
+    return res.status(429).json({ error: 'key generation limit reached — try again later' });
+  }
+  if (!w || w.resetAt <= now) genWindows.set(req.user.id, { count: 1, resetAt: now + GEN_WINDOW_MS });
+  else w.count++;
 
   let privateKey, publicKey;
   try {
     const opts = {};
     if (keyType === 'rsa') opts.bits = Math.min(Math.max(parseInt(bits, 10) || 3072, 2048), 8192);
-    if (passphrase) opts.passphrase = String(passphrase);
+    if (passphrase) {
+      opts.passphrase = String(passphrase);
+      // ssh2 refuses to encrypt a generated key without an explicit cipher —
+      // aes256-ctr is what ssh-keygen uses by default.
+      opts.cipher = 'aes256-ctr';
+    }
     const pair = ssh2.utils.generateKeyPairSync(keyType, opts);
     privateKey = pair.private.toString();
     publicKey = pair.public.toString();
@@ -163,6 +181,13 @@ router.put('/:id', (req, res) => {
         secret.certificate = String(certificate).trim();
       }
     }
+    // Verify the passphrase actually unlocks the stored key — a typo here
+    // would otherwise brick the credential silently at next connect.
+    try {
+      publicKeyFor(secret.privateKey, secret.passphrase);
+    } catch {
+      return res.status(400).json({ error: 'passphrase does not unlock this private key' });
+    }
     updates.push('secret_enc = ?');
     params.push(encryptSecret(JSON.stringify(secret)));
   }
@@ -170,6 +195,7 @@ router.put('/:id', (req, res) => {
   if (!updates.length) return res.json({ credential: credView(cred) });
   db.prepare(`UPDATE credentials SET ${updates.join(', ')} WHERE id = ?`).run(...params, cred.id);
   const row = db.prepare('SELECT * FROM credentials WHERE id = ?').get(cred.id);
+  auditReq(req, 'credential.updated', `${cred.type} credential '${row.name}'`);
   res.json({ credential: credView(row) });
 });
 
