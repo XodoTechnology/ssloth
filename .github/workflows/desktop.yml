@@ -118,6 +118,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh release create shells out to git to resolve the tag — without a
+      # checkout it dies with "fatal: not a git repository".
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: arts
