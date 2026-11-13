@@ -126,4 +126,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" arts/ssloth-*/*             --title "$GITHUB_REF_NAME" --generate-notes ||           gh release upload "$GITHUB_REF_NAME" arts/ssloth-*/* --clobber
+          set -e
+          # Create the release shell first (no assets), then upload — a
+          # generate-notes or asset-upload flake can't strand a half-made
+          # release, and re-runs just clobber-upload onto the existing one.
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes \
+              || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME"
+          fi
+          gh release upload "$GITHUB_REF_NAME" arts/ssloth-*/* --clobber
