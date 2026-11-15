@@ -16,6 +16,7 @@ const HISTORY_MIN_INTERVAL_MS = 60 * 1000; // live views shouldn't flood the tab
 const history = new Map(); // hostId -> [{t, entries, source}]
 const lastErr = new Map(); // hostId -> error string from the last failed sweep
 const lastPersist = new Map(); // hostId -> ms of last sensor_history write
+const powerStates = new Map(); // hostId -> {state:'on'|'off', at} — chassis query per sweep
 
 const stmtHost = db.prepare('SELECT id, user_id, name, hostname FROM hosts WHERE id = ?');
 const stmtRules = db.prepare(
@@ -106,6 +107,10 @@ function latest(hostId) {
   return arr && arr.length ? arr[arr.length - 1] : null;
 }
 
+function powerState(hostId) {
+  return powerStates.get(hostId) || null;
+}
+
 let sweepSeq = 0;
 function specFor(hostRow, holderId) {
   const spec = resolveConnectSpec(hostRow.user_id, { hostId: hostRow.id });
@@ -117,16 +122,28 @@ async function sweep() {
   if (!bmc) return;
   let hosts;
   try {
-    hosts = db.prepare("SELECT id, user_id FROM hosts WHERE protocol = 'bmc' AND COALESCE(sensor_exclude,0) = 0").all();
+    // All BMC hosts, excluded ones too: sensor_exclude quiets the sensor
+    // history, but the power badge should still reflect the chassis.
+    hosts = db.prepare('SELECT id, user_id, sensor_exclude FROM hosts WHERE protocol = \'bmc\'').all();
   } catch { return; }
+  const seen = new Set();
   for (const h of hosts) {
+    seen.add(h.id);
     const hid = `sensors-${h.id}-${++sweepSeq}`;
     let spec = null;
     try {
       spec = specFor(h, hid);
-      const s = JSON.parse(await bmc.readSensors(spec));
-      record(h.id, s);
-      lastErr.delete(h.id);
+      lastErr.delete(h.id); // spec resolved — any prior sweep error is stale
+      // Chassis power via IPMI — one extra UDP exchange per host per sweep.
+      // Non-IPMI BMCs just leave the previous state (or none) in place.
+      try {
+        const on = await bmc.powerStatus(spec);
+        powerStates.set(h.id, { state: on ? 'on' : 'off', at: Date.now() });
+      } catch {}
+      if (!h.sensor_exclude) {
+        const s = JSON.parse(await bmc.readSensors(spec));
+        record(h.id, s);
+      }
     } catch (e) {
       lastErr.set(h.id, String(e && e.message || e).slice(0, 140));
     } finally {
@@ -135,6 +152,7 @@ async function sweep() {
       }
     }
   }
+  for (const id of [...powerStates.keys()]) if (!seen.has(id)) powerStates.delete(id);
 }
 
 /// Trim sensor_history beyond the retention window — runs on the sweep so a
@@ -155,4 +173,4 @@ function start() {
   timer.unref?.();
 }
 
-module.exports = { record, getHistory, latest, start, lastErr: (id) => lastErr.get(id) || null };
+module.exports = { record, getHistory, latest, powerState, start, lastErr: (id) => lastErr.get(id) || null };

@@ -157,8 +157,13 @@ function handleKvmWs(ws, req, user) {
           break;
         case 'reattach': {
           const s = sessions.get(msg.sessionId);
-          if (!s || !user.admin && false) break; // sessions are per-user below
-          if (s.userId !== user.id) break;
+          // Unknown id = the server restarted (or the session reaped) —
+          // tell the client so it falls back to a fresh connect instead of
+          // sitting on "reattaching…" forever.
+          if (!s || s.userId !== user.id) {
+            send(ws, { type: 'session-gone' });
+            break;
+          }
           session = s;
           s.ws = ws;
           s.detachedAt = null;

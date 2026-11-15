@@ -22,6 +22,8 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
   const [mountOpen, setMountOpen] = useState(false);
   const [mountUrl, setMountUrl] = useState('');
   const [op, setOp] = useState(null); // {name, stages:[{msg,done}], done, err}
+  const [powerOff, setPowerOff] = useState(false);
+  const [powerBusy, setPowerBusy] = useState(false);
   const [stages, setStages] = useState([]); // connect-time stage lines
   const [takeover, setTakeover] = useState(null); // {user, question, answers:[{answer,label}]}
   const fileRef = useRef(null);
@@ -40,6 +42,7 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
     const prior = useStore.getState().paneStates[`${tab.id}:${pane.id}`];
     if (prior?.sessionId) sessionRef.current = prior.sessionId;
     open();
+    checkPower();
     // The toolbar drives this pane through the registered sender — mount
     // modal, power, reconnect all reach the live ws through sendJson.
     useStore.getState().registerPane(tab.id, pane.id, {
@@ -70,6 +73,36 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
     const delay = Math.min(1000 * r.attempt, 15000);
     setPaneState({ status: 'connecting', statusMsg: `connection lost — reconnecting in ${Math.ceil(delay / 1000)}s` });
     r.timer = setTimeout(() => mountedRef.current && open(), delay);
+  }
+
+  // Chassis power for the "host off" banner — asked fresh whenever the
+  // console comes up, since the dashboard's cached badge can be minutes stale.
+  async function checkPower() {
+    const hostId = pane.target?.hostId;
+    if (!hostId) return;
+    try {
+      const d = await api(`/api/bmc/power/${hostId}`);
+      setPowerOff(d.power === 'off');
+    } catch {}
+  }
+
+  async function powerOn() {
+    const hostId = pane.target?.hostId;
+    if (!hostId || powerBusy) return;
+    setPowerBusy(true);
+    try {
+      const r = await api('/api/bmc/bulk', { method: 'POST', body: { host_ids: [hostId], action: 'power', value: 'on' } });
+      const res = r.results?.[0];
+      if (res?.ok) {
+        toast('power on sent', 'success');
+        setPowerOff(false);
+      } else {
+        toast(res?.message || 'power on failed', 'error');
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    setPowerBusy(false);
   }
 
   function open() {
@@ -106,11 +139,18 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       switch (msg.type) {
+        case 'session-gone':
+          // Server restarted / session reaped — drop the stale id and open a
+          // fresh console on this same socket.
+          sessionRef.current = null;
+          ws.send(JSON.stringify({ type: 'connect', ...pane.target }));
+          break;
         case 'ready':
           sessionRef.current = msg.sessionId;
           retryRef.current.attempt = 0;
           setStages([]);
           setPaneState({ status: 'ready', sessionId: msg.sessionId, statusMsg: msg.reattached ? 'session restored' : `${msg.title} (${msg.family})` });
+          checkPower();
           break;
         case 'op':
           // A BMC operation's progress report — mount/power stage lines.
@@ -272,6 +312,15 @@ export default function KvmPane({ tab, pane, active, focused, onFocus, onPaneSta
           {(st.status === 'error' || st.status === 'closed') && (
             <button className="btn-primary mt-2" onClick={() => { intentionalRef.current = false; open(); }}>Reconnect</button>
           )}
+        </div>
+      )}
+      {powerOff && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 rounded-md border border-amber-500/40 bg-ink-900/95 px-3 py-2 shadow-lg">
+          <span className="text-xs text-amber-300">Host is powered off</span>
+          <button className="btn-primary !px-2 !py-1 text-xs" disabled={powerBusy} onClick={powerOn}>
+            {powerBusy ? 'powering on…' : 'Power on'}
+          </button>
+          <button className="text-xs text-zinc-500 hover:text-zinc-300" onClick={() => setPowerOff(false)}>dismiss</button>
         </div>
       )}
       {op && (

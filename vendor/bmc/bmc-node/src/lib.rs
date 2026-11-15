@@ -489,6 +489,35 @@ pub fn ipmi_power(spec: SessionSpec, action: String) -> AsyncTask<IpmiPowerTask>
     })
 }
 
+/// Chassis power state over IPMI — true = on. Errors on non-IPMI BMCs.
+pub struct PowerStatusTask {
+    host: String,
+    user: String,
+    pass: String,
+}
+
+#[napi]
+impl Task for PowerStatusTask {
+    type Output = bool;
+    type JsValue = bool;
+    fn compute(&mut self) -> Result<Self::Output> {
+        ipmi::chassis_power_on(&self.host, &self.user, &self.pass)
+            .map_err(|e| Error::from_reason(e.to_string()))
+    }
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(out)
+    }
+}
+
+#[napi]
+pub fn power_status(spec: SessionSpec) -> AsyncTask<PowerStatusTask> {
+    AsyncTask::new(PowerStatusTask {
+        host: spec.host,
+        user: spec.user,
+        pass: spec.pass,
+    })
+}
+
 /// Cold-reset the management controller itself (host power untouched).
 pub struct BmcResetTask {
     host: String,

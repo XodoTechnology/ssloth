@@ -179,6 +179,8 @@ export default function BmcDashboard() {
                 </button>
               </div>
               <div className="flex flex-wrap gap-2 text-[11px]">
+                {h.power === 'on' && <span className="text-emerald-500">power on</span>}
+                {h.power === 'off' && <span className="text-amber-400">power off</span>}
                 {h.hostkey_status && h.hostkey_status !== 'ok' && (
                   <span className={KEY_CHIP[h.hostkey_status] || 'text-zinc-500'}>
                     key {h.hostkey_status}

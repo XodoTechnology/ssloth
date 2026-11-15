@@ -5,7 +5,7 @@ const { db } = require('../db');
 const { auditReq } = require('../auth');
 const { resolveConnectSpec } = require('../ssh/manager');
 const sensorsPoll = require('../sensors-poll');
-const { bmc, applyRoutes } = require('../bmc');
+const { bmc, applyRoutes, releaseRoute } = require('../bmc');
 
 const router = express.Router();
 
@@ -25,6 +25,7 @@ router.get('/overview', (req, res) => {
       sensor_exclude: !!h.sensor_exclude,
       latest,
       sweep_error: sensorsPoll.lastErr(h.id),
+      power: sensorsPoll.powerState(h.id)?.state || null,
       bad_count: bad,
       warn_count: warn,
     };
@@ -33,6 +34,29 @@ router.get('/overview', (req, res) => {
     rows.sort((a, b) => b.bad_count - a.bad_count || b.warn_count - a.warn_count || a.name.localeCompare(b.name));
   }
   res.json({ bmc_available: !!bmc, hosts: rows });
+});
+
+// Live chassis power query — the dashboard badge is sweep-cached (5 min),
+// but the console's "host off?" prompt wants a fresh answer before offering
+// to power on. IPMI chassis status; non-IPMI BMCs return power:null.
+router.get('/power/:id', async (req, res) => {
+  const h = db
+    .prepare("SELECT id FROM hosts WHERE id = ? AND protocol = 'bmc' AND (user_id = ? OR shared = 1)")
+    .get(req.params.id, req.user.id);
+  if (!h) return res.status(404).json({ error: 'not found' });
+  if (!bmc) return res.status(503).json({ error: 'bmc addon unavailable' });
+  const holder = `power-${req.user.id}-${h.id}-${Date.now()}`;
+  const spec = resolveConnectSpec(req.user.id, { hostId: h.id });
+  try {
+    applyRoutes(resolveConnectSpec, req.user.id, spec, { id: holder });
+    const on = await bmc.powerStatus({ host: spec.hostname, user: spec.username || '', pass: spec.password || '' });
+    res.json({ power: on ? 'on' : 'off' });
+  } catch (e) {
+    // Unknown is a valid answer (non-IPMI BMC, unreachable) — not a 500.
+    res.json({ power: null, error: String(e.message || e).slice(0, 200) });
+  } finally {
+    try { releaseRoute(spec.hostname, holder); } catch {}
+  }
 });
 
 // ---- bulk actions across selected dashboard hosts ----
