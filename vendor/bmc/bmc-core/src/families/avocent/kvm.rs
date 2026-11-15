@@ -445,8 +445,17 @@ pub fn connect(host: &str, launch: &super::Launch) -> std::io::Result<Console> {
     video.send(&video_packet(msg::VIDEO_CHANNEL_AUTH as u8, &auth))?;
 
     let deadline = Instant::now() + Duration::from_secs(15);
+    // VIDEO_STOPPED during auth means the channel is up but the host has no
+    // signal — the same "no signal" the running loop already tolerates. Give
+    // CONNECT_STATUS a short grace to still report a refusal, then accept the
+    // session: frames resume on their own when the host powers on.
+    let mut no_signal_at: Option<Instant> = None;
     loop {
-        if Instant::now() > deadline {
+        let now = Instant::now();
+        if now > deadline || no_signal_at.map_or(false, |t| now.duration_since(t) > Duration::from_secs(3)) {
+            if no_signal_at.is_some() {
+                break;
+            }
             return Err(ioerr("the video channel was never acknowledged"));
         }
         let Some(f) = video.poll()? else { continue };
@@ -458,7 +467,7 @@ pub fn connect(host: &str, launch: &super::Launch) -> std::io::Result<Console> {
                 }
                 break;
             }
-            msg::VIDEO_STOPPED => return Err(ioerr("the BMC stopped the video channel")),
+            msg::VIDEO_STOPPED => no_signal_at = Some(Instant::now()),
             _ => continue,
         }
     }
