@@ -566,8 +566,12 @@ fn avocent_connect(host: &str, user: &str, pass: &str, progress: &Arc<Mutex<Stri
             if avocent_kvm::needs_ack(f.id) && video.send(&avocent_kvm::video_ack(1)).is_err() {
                 break;
             }
+            // VIDEO_STOPPED is the BMC saying "no signal" — it fires when the
+            // managed host powers off, not when the console is over. The
+            // channel stays open and frames resume on power-on, so keep the
+            // session (and its web login) alive instead of dropping it.
             if f.id == avocent_kvm::msg::VIDEO_STOPPED {
-                break;
+                continue;
             }
             if codec.feed(&f, &mut dec.lock().unwrap()) {
                 frames.tick();
